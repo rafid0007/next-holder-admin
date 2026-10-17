@@ -1,9 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
-  cacheComponents: true,
-  partialPrefetching: true,
+  // This repo documents itself in README.md; no generated AGENTS.md needed.
+  agentRules: false,
   turbopack: {
     rules: {
       "*.css": {
