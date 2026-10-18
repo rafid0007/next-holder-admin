@@ -80,13 +80,69 @@ work-order and verification states — onto a tone, so one component renders the
 
 ## Running against the backend
 
-1. `cp .env.example .env.local` and point `NEXT_PUBLIC_API_BASE_URL` at your Django server
-   (default `http://localhost:8000/api/v1`).
-2. Django needs the console's origin in `CORS_ALLOWED_ORIGINS` (`http://localhost:3000`).
-3. Sign in at `/login` with a landlord account, then open `/properties`.
+Only `/login`, `/properties` and `/properties/[id]` read live data. The other screens render
+fixtures whichever backend you point at — see
+[What the current API cannot do yet](#what-the-current-api-cannot-do-yet) for why.
 
-`scripts/README.md` has a one-command way to stand up a throwaway seeded database if you do not
-want to use your own dev data.
+### Against a hosted deployment
+
+1. Set the URL in `.env.local` (`cp .env.example .env.local` first). End it at `/api/v1`, with no
+   trailing slash:
+
+   ```bash
+   NEXT_PUBLIC_API_BASE_URL=https://your-host.com/api/v1
+   ```
+
+   `NEXT_PUBLIC_*` values are inlined at build time, so restart `npm run dev` after changing it.
+   The Settings page shows which API the console is pointed at, under Integrations.
+
+2. On the **server**, add the console's origin to `CORS_ALLOWED_ORIGINS` (`http://localhost:3000`
+   while developing) and restart it. `config/settings/prod.py` sets `CORS_ALLOW_ALL_ORIGINS =
+   False`, so this is required — and a browser reports a CORS rejection as a plain network
+   failure, so the console will say it could not reach the API even though the server is healthy.
+
+3. `npm run dev`, sign in at `/login` with a landlord account on that deployment, open
+   `/properties`.
+
+Anything you do there writes straight through: the marketplace toggle, create and edit have no
+staging step.
+
+### Against a local Django server
+
+```bash
+cd ../next-holder-backend
+.venv/bin/python manage.py migrate
+.venv/bin/python manage.py runserver 8000
+```
+
+`.env.example` already points at `http://localhost:8000/api/v1`, so no config change is needed.
+
+You then need a landlord account that owns some properties, since `/properties` lists only the
+signed-in landlord's own portfolio. Either:
+
+- **Seeded fixtures in a throwaway database** — `scripts/README.md` has the commands, and signs
+  you in as `landlord@nextholder.test` / `verify-pass-123`.
+- **Your own account**, then add properties through the console's "Add property" form:
+
+  ```bash
+  curl -X POST http://localhost:8000/api/v1/auth/signup \
+    -H 'Content-Type: application/json' \
+    -d '{"email":"you@example.com","password":"your-password","confirmPassword":"your-password",
+         "fullName":"Your Name","phoneNumber":"+8801700000000","roles":["landlord"]}'
+  ```
+
+### If every property request returns 403
+
+`IsLandlord` checks `current_role == 'landlord'`, not whether `landlord` appears in `roles`.
+Signup sets `current_role` from the first role you pass, so the call above is fine — but an
+existing account sitting in the tenant role is rejected on every property endpoint. The console
+has no role switcher yet; switch over the API:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/auth/switch-role \
+  -H 'Content-Type: application/json' -H 'Authorization: Bearer <access-token>' \
+  -d '{"role":"landlord"}'
+```
 
 ### How the wired screens are built
 
