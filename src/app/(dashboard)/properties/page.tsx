@@ -9,8 +9,8 @@ import {
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Field, Input, SearchInput, Select, Switch, Textarea } from "@/components/ui/field";
-import { Modal } from "@/components/ui/modal";
+import { SearchInput, Select } from "@/components/ui/field";
+import { PropertyFormModal } from "@/components/properties/property-form";
 import { DataTable, type Column } from "@/components/ui/table";
 import { SegmentedControl, Tabs } from "@/components/ui/tabs";
 import { EmptyState, FilterBar, PageHeader, StatCard } from "@/components/ui/misc";
@@ -19,8 +19,6 @@ import { useApi } from "@/lib/api/hooks";
 import {
   acceptTransfer, listAllProperties, listTransferRequests, rejectTransfer,
 } from "@/lib/api/resources";
-import { api } from "@/lib/api/client";
-import { endpoints } from "@/lib/api/endpoints";
 import type { ApiProperty, ApiTransferRequest, PropertyCategory } from "@/lib/api/types";
 import { cn, formatDate, humanize, money, number } from "@/lib/utils";
 
@@ -390,11 +388,10 @@ export default function PropertiesPage() {
         )}
       </Card>
 
-      <CreatePropertyModal
+      <PropertyFormModal
         open={createOpen}
         onClose={() => setCreateOpen(false)}
-        onCreated={properties.refetch}
-        categories={categories}
+        onSaved={properties.refetch}
       />
     </>
   );
@@ -550,188 +547,5 @@ function PropertyCard({ property }: { property: ApiProperty }) {
         </div>
       </div>
     </Link>
-  );
-}
-
-function CreatePropertyModal({
-  open,
-  onClose,
-  onCreated,
-  categories,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onCreated: () => void;
-  categories: PropertyCategory[];
-}) {
-  const [categoryId, setCategoryId] = useState("");
-  const [listInMarketplace, setListInMarketplace] = useState(true);
-  const [busy, setBusy] = useState(false);
-
-  // Types and amenities come from the taxonomy endpoints, not from the listings.
-  const taxonomy = useApi(
-    useCallback(
-      () => api.get<PropertyCategory[]>(endpoints.properties.categories),
-      [],
-    ),
-  );
-  const amenities = useApi(
-    useCallback(
-      () => api.get<{ id: number; name: string; isActive: boolean }[]>(endpoints.properties.amenities),
-      [],
-    ),
-  );
-
-  const categoryOptions = taxonomy.data ?? categories;
-  const selectedCategory =
-    categoryOptions.find((c) => String(c.id) === categoryId) ?? categoryOptions[0];
-  const types = selectedCategory?.types ?? [];
-  const [picked, setPicked] = useState<number[]>([]);
-
-  async function submit() {
-    setBusy(true);
-    try {
-      // POST /properties/ takes PropertyCreateUpdateSerializer and creates the
-      // property under the authenticated landlord.
-      onCreated();
-      onClose();
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Modal
-      open={open}
-      onClose={onClose}
-      title="Add a property"
-      description="Creating a property counts against the landlord's subscription limit."
-      size="lg"
-      footer={
-        <>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button variant="primary" disabled={busy} onClick={submit}>
-            Create property
-          </Button>
-        </>
-      }
-    >
-      <div className="space-y-5">
-        <Field label="Title" hint="Shown in the marketplace and all admin lists.">
-          <Input placeholder="e.g. Gulshan 2 — 3 bed family apartment" />
-        </Field>
-
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="Category">
-            <Select value={categoryId} onChange={(e) => setCategoryId(e.target.value)}>
-              {categoryOptions.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Property type">
-            <Select>
-              {types.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-            </Select>
-          </Field>
-          <Field label="Listing type">
-            <Select>
-              <option value="for_rent">For rent</option>
-              <option value="for_sale">For sale</option>
-              <option value="for_book">For book</option>
-            </Select>
-          </Field>
-          <Field label="Holding number" hint="Lazily created if it does not exist yet.">
-            <Input placeholder="H-102" />
-          </Field>
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-3">
-          <Field label="Monthly rent (৳)">
-            <Input type="number" placeholder="48000" />
-          </Field>
-          <Field label="Deposit (৳)">
-            <Input type="number" placeholder="96000" />
-          </Field>
-          <Field label="Area (sqft)">
-            <Input type="number" placeholder="1400" />
-          </Field>
-        </div>
-
-        <div className="grid gap-4 sm:grid-cols-4">
-          <Field label="Bedrooms">
-            <Input type="number" defaultValue={2} />
-          </Field>
-          <Field label="Bathrooms">
-            <Input type="number" defaultValue={2} />
-          </Field>
-          <Field label="Balconies">
-            <Input type="number" defaultValue={1} />
-          </Field>
-          <Field label="Total rooms">
-            <Input type="number" defaultValue={4} />
-          </Field>
-        </div>
-
-        <Field label="Address">
-          <Input placeholder="House 9, Road 27" />
-        </Field>
-
-        <Field label="Description">
-          <Textarea placeholder="Describe the space, utilities and nearby landmarks…" />
-        </Field>
-
-        <div>
-          <p className="text-ink mb-2 text-[13px] font-medium">Amenities</p>
-          <div className="flex flex-wrap gap-2">
-            {(amenities.data ?? [])
-              .filter((a) => a.isActive)
-              .map((amenity) => {
-                const on = picked.includes(amenity.id);
-                return (
-                  <button
-                    key={amenity.id}
-                    type="button"
-                    onClick={() =>
-                      setPicked((prev) =>
-                        on ? prev.filter((id) => id !== amenity.id) : [...prev, amenity.id],
-                      )
-                    }
-                    className={cn(
-                      "focus-ring rounded-lg border px-2.5 py-1 text-[13px] transition-colors",
-                      on
-                        ? "bg-brand-soft border-brand/30 text-brand-ink"
-                        : "border-line-strong text-ink-muted hover:bg-surface-hover",
-                    )}
-                  >
-                    {amenity.name}
-                  </button>
-                );
-              })}
-            {amenities.loading && <span className="text-ink-subtle text-[13px]">Loading…</span>}
-          </div>
-        </div>
-
-        <div className="border-line bg-surface-muted flex items-center justify-between rounded-xl border p-4">
-          <div>
-            <p className="text-ink text-[13px] font-medium">List in marketplace immediately</p>
-            <p className="text-ink-subtle text-xs">
-              Tenants can discover it and spend credits to unlock contact details.
-            </p>
-          </div>
-          <Switch
-            checked={listInMarketplace}
-            onChange={setListInMarketplace}
-            label="List in marketplace"
-          />
-        </div>
-      </div>
-    </Modal>
   );
 }

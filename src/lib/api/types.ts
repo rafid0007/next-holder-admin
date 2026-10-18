@@ -519,6 +519,7 @@ export interface ApiProperty {
   listingType: ListingType;
   status: PropertyStatus;
   isListedInMarketplace: boolean;
+  /** Set when the property exceeds the landlord's plan limit; read-only until freed. */
   isLocked: boolean;
   confirmationAmount: string | null;
   cancellationDeadlineHours: number | null;

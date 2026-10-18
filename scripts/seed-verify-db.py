@@ -6,6 +6,8 @@ from apps.accounts.models import User, UserRole
 from apps.properties.models import (
     Property, PropertyCategory, PropertyType, Amenity, PropertyUnit, PropertyStatus, ListingType,
 )
+from apps.geo.models import Division, District, Thana, Area
+from apps.subscriptions.models import SubscriptionPlan, SubscriptionTier, UserSubscription
 from apps.leases.models import Lease, LeaseStatus
 from apps.maintenance.models import MaintenanceRequest
 from apps.rent.models import RentBill, BillStatus, BillType
@@ -42,6 +44,42 @@ for name in ["Lift", "Generator backup", "Car parking", "CCTV"]:
     Amenity.objects.get_or_create(slug=name.lower().replace(" ", "-"), defaults=dict(name=name))
 amenities = list(Amenity.objects.all())
 
+# Geo hierarchy. Creating a property requires division/district/thana, so the
+# form's cascading pickers need something to offer.
+dhaka_div, _ = Division.objects.get_or_create(slug="dhaka", defaults=dict(name="Dhaka"))
+ctg_div, _ = Division.objects.get_or_create(slug="chattogram", defaults=dict(name="Chattogram"))
+dhaka_dist, _ = District.objects.get_or_create(
+    division=dhaka_div, slug="dhaka", defaults=dict(name="Dhaka"))
+ctg_dist, _ = District.objects.get_or_create(
+    division=ctg_div, slug="chattogram", defaults=dict(name="Chattogram"))
+thanas = {}
+for district, names in [(dhaka_dist, ["Gulshan", "Dhanmondi", "Mirpur", "Uttara", "Baridhara"]),
+                        (ctg_dist, ["Khulshi", "Panchlaish"])]:
+    for name in names:
+        thanas[name], _ = Thana.objects.get_or_create(
+            district=district, slug=name.lower(), defaults=dict(name=name))
+for thana_name, area_names in [("Gulshan", ["Gulshan 1", "Gulshan 2"]),
+                               ("Dhanmondi", ["Road 27", "Jigatola"]),
+                               ("Mirpur", ["Mirpur DOHS", "Pallabi"]),
+                               ("Uttara", ["Sector 7", "Sector 13"]),
+                               ("Baridhara", ["Baridhara DOHS", "Diplomatic Zone"]),
+                               ("Khulshi", ["South Khulshi"]),
+                               ("Panchlaish", ["Mehedibag"])]:
+    for area_name in area_names:
+        Area.objects.get_or_create(
+            thana=thanas[thana_name], slug=area_name.lower().replace(" ", "-"),
+            defaults=dict(name=area_name, area_type="neighbourhood"))
+
+# Signing up puts a landlord on the Free plan, whose 2-property limit would
+# reject every create from the console. Move the seeded landlord onto Basic so
+# the create path is exercisable; drop its limit here to see the rejection.
+plan, _ = SubscriptionPlan.objects.get_or_create(
+    tier=SubscriptionTier.BASIC,
+    defaults=dict(display_name="Basic", max_properties=10, monthly_credits=50,
+                  price_monthly=Decimal(500), price_yearly=Decimal(5000)),
+)
+UserSubscription.objects.update_or_create(user=landlord, defaults=dict(plan=plan, is_active=True))
+
 seeds = [
     ("Gulshan 2 — 3 bed family apartment", apartment, ListingType.FOR_RENT, PropertyStatus.OCCUPIED,
      False, "House 42, Road 11", "Dhaka", "Gulshan 2", 85000, 2100, 3, 3),
@@ -67,6 +105,9 @@ for (title, ptype, listing, status, listed, street, city, hood, rent, sqft, bed,
                 "parking. Walking distance from main road transport and local markets."),
             category=ptype.category, property_type=ptype, listing_type=listing, status=status,
             is_listed_in_marketplace=listed, street=street, city=city, state="Dhaka",
+            division=thanas[hood.split()[0]].district.division,
+            district=thanas[hood.split()[0]].district,
+            thana=thanas[hood.split()[0]],
             neighborhood=hood, rent_amount=Decimal(rent), deposit_amount=Decimal(rent * 2),
             area_sqft=Decimal(sqft), bedrooms=bed, bathrooms=bath, balconies=1, rooms=bed + 2,
             has_kitchen=True, has_drawing_room=bed > 2,
@@ -113,4 +154,5 @@ PropertyInquiry.objects.get_or_create(
     defaults=dict(sender=tenant, phone="+8801511667700", email="ishrat@example.com",
                   message="Is the flat available from the 1st? Can I visit this weekend?"))
 
+print("plan:", plan.display_name, "limit:", plan.max_properties)
 print("landlord:", landlord.email, "properties:", Property.objects.filter(landlord=landlord).count())

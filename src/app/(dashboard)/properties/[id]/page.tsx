@@ -12,6 +12,7 @@ import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/field";
+import { PropertyFormModal } from "@/components/properties/property-form";
 import { DataTable } from "@/components/ui/table";
 import { Tabs } from "@/components/ui/tabs";
 import {
@@ -33,6 +34,7 @@ export default function PropertyDetailPage() {
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
   const [tab, setTab] = useState("overview");
+  const [editOpen, setEditOpen] = useState(false);
 
   const property = useApi(useCallback(() => getProperty(id), [id]));
 
@@ -93,7 +95,15 @@ export default function PropertyDetailPage() {
             <Button>
               <Copy className="size-4" /> Duplicate
             </Button>
-            <Button>
+            <Button
+              onClick={() => setEditOpen(true)}
+              disabled={data.isLocked}
+              title={
+                data.isLocked
+                  ? "Locked properties are read-only until a plan slot frees up."
+                  : undefined
+              }
+            >
               <Pencil className="size-4" /> Edit
             </Button>
             <Button variant="danger" disabled={data.isLocked}>
@@ -107,7 +117,7 @@ export default function PropertyDetailPage() {
           <Badge tone={data.listingType === "for_book" ? "info" : "neutral"}>
             {humanize(data.listingType)}
           </Badge>
-          {data.isLocked && <Badge tone="warn">Locked by active tenancy</Badge>}
+          {data.isLocked && <Badge tone="warn">Locked — over plan limit</Badge>}
           {data.isMarketplaceExpired && <Badge tone="bad">Marketplace window expired</Badge>}
           {data.holding && <Badge tone="neutral">Holding {data.holding.number}</Badge>}
         </div>
@@ -582,6 +592,13 @@ export default function PropertyDetailPage() {
           )}
         </div>
       </div>
+
+      <PropertyFormModal
+        open={editOpen}
+        onClose={() => setEditOpen(false)}
+        onSaved={property.refetch}
+        property={data}
+      />
     </>
   );
 }
@@ -680,7 +697,10 @@ function MarketplaceCard({
               label: "Window",
               value: property.isMarketplaceExpired ? "Expired" : "Open",
             },
-            { label: "Locked", value: property.isLocked ? "Yes" : "No" },
+            {
+              label: "Locked",
+              value: property.isLocked ? "Over plan limit" : "No",
+            },
           ]}
         />
       </CardBody>
