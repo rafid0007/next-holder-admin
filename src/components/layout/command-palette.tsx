@@ -1,10 +1,11 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Building2, CornerDownLeft, Search } from "lucide-react";
 import { navItems } from "./nav";
-import { properties, users } from "@/lib/mock/data";
+import { useApi } from "@/lib/api/hooks";
+import { listAllProperties, listUsers } from "@/lib/api/resources";
 import { cn } from "@/lib/utils";
 
 interface Entry {
@@ -31,6 +32,9 @@ export function CommandPalette({
 
 function Palette({ onClose }: { onClose: () => void }) {
   const router = useRouter();
+  // Loaded when the palette opens, and dropped when it closes with the component.
+  const properties = useApi(useCallback(() => listAllProperties().catch(() => []), []));
+  const people = useApi(useCallback(() => listUsers().catch(() => null), []));
   const [query, setQuery] = useState("");
   const [cursor, setCursor] = useState(0);
 
@@ -43,15 +47,15 @@ function Palette({ onClose }: { onClose: () => void }) {
         group: "Navigate",
         href: item.href,
       })),
-      ...properties.slice(0, 40).map((p) => ({
+      ...(properties.data ?? []).slice(0, 40).map((p) => ({
         id: `prop-${p.id}`,
         label: p.title,
-        meta: `${p.neighborhood}, ${p.city}`,
+        meta: [p.neighborhood, p.city].filter(Boolean).join(", "),
         group: "Properties",
         href: `/properties/${p.id}`,
         icon: <Building2 className="size-3.5" />,
       })),
-      ...users.map((u) => ({
+      ...(people.data?.results ?? []).map((u) => ({
         id: `user-${u.id}`,
         label: u.fullName,
         meta: u.email,
@@ -59,7 +63,7 @@ function Palette({ onClose }: { onClose: () => void }) {
         href: "/users",
       })),
     ],
-    [],
+    [properties.data, people.data],
   );
 
   const results = useMemo(() => {

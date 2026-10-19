@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Bell, BellOff, CalendarCheck, Check, FileText, Info, Megaphone, Send, Users, Wrench,
@@ -12,8 +12,12 @@ import { Field, Input, SearchInput, Select, Switch, Textarea } from "@/component
 import { Modal } from "@/components/ui/modal";
 import { Tabs } from "@/components/ui/tabs";
 import { EmptyState, FilterBar, PageHeader, StatCard } from "@/components/ui/misc";
-import { notifications as seed } from "@/lib/mock/data";
-import type { NotificationType } from "@/lib/api/types";
+import { useApi } from "@/lib/api/hooks";
+import {
+  listNotifications, markAllNotificationsRead, markNotificationRead,
+} from "@/lib/api/resources";
+import { CardSkeleton, ErrorState } from "@/components/ui/states";
+import type { ApiNotification, NotificationType } from "@/lib/api/types";
 import { cn, formatDateTime, humanize, relativeTime } from "@/lib/utils";
 
 const typeMeta: Record<NotificationType, { icon: typeof Bell; tone: string }> = {
@@ -26,11 +30,14 @@ const typeMeta: Record<NotificationType, { icon: typeof Bell; tone: string }> = 
 };
 
 export default function NotificationsPage() {
-  const [items, setItems] = useState(seed);
   const [tab, setTab] = useState("unread");
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [composeOpen, setComposeOpen] = useState(false);
+
+  // The endpoint is scoped to the signed-in user's own notifications.
+  const feed = useApi(useCallback(() => listNotifications(), []));
+  const items: ApiNotification[] = useMemo(() => feed.data?.results ?? [], [feed.data]);
 
   const tabs = useMemo(
     () => [
@@ -50,8 +57,15 @@ export default function NotificationsPage() {
     });
   }, [items, tab, query, typeFilter]);
 
-  const markRead = (id: number) =>
-    setItems((prev) => prev.map((n) => (n.id === id ? { ...n, isRead: true } : n)));
+  async function markRead(id: number) {
+    await markNotificationRead(id);
+    feed.refetch();
+  }
+
+  async function markAllRead() {
+    await markAllNotificationsRead();
+    feed.refetch();
+  }
 
   return (
     <>
@@ -60,7 +74,7 @@ export default function NotificationsPage() {
         description="Everything the platform has pushed to admins, and announcements you can send out."
         actions={
           <>
-            <Button onClick={() => setItems((prev) => prev.map((n) => ({ ...n, isRead: true })))}>
+            <Button onClick={markAllRead} disabled={items.length === 0}>
               <Check className="size-4" /> Mark all read
             </Button>
             <Button variant="primary" onClick={() => setComposeOpen(true)}>
@@ -71,6 +85,14 @@ export default function NotificationsPage() {
       />
 
       <div className="mb-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {feed.loading && !feed.data ? (
+          Array.from({ length: 4 }, (_, i) => (
+            <Card key={i}>
+              <CardSkeleton />
+            </Card>
+          ))
+        ) : (
+          <>
         <StatCard
           label="Unread"
           value={String(items.filter((n) => !n.isRead).length)}
@@ -86,6 +108,8 @@ export default function NotificationsPage() {
           value={String(items.filter((n) => n.type === "general").length)}
           hint="platform-wide"
         />
+          </>
+        )}
       </div>
 
       <Card>
@@ -112,7 +136,15 @@ export default function NotificationsPage() {
           </Select>
         </FilterBar>
 
-        {rows.length === 0 ? (
+        {feed.error ? (
+          <CardBody>
+            <ErrorState error={feed.error} onRetry={feed.refetch} resource="notifications" />
+          </CardBody>
+        ) : feed.loading && !feed.data ? (
+          <CardBody>
+            <CardSkeleton />
+          </CardBody>
+        ) : rows.length === 0 ? (
           <CardBody>
             <EmptyState
               icon={<BellOff className="size-5" />}

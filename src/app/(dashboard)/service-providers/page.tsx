@@ -1,11 +1,11 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
-  BadgeCheck, Briefcase, CheckCircle2, FileText, MapPin, PauseCircle, Star, Users, XCircle,
+  BadgeCheck, Briefcase, CheckCircle2, FileText, PauseCircle, Users, XCircle,
 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { Badge, StatusBadge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, SearchInput, Select, Textarea } from "@/components/ui/field";
 import { Drawer } from "@/components/ui/modal";
@@ -14,15 +14,38 @@ import { Tabs } from "@/components/ui/tabs";
 import {
   Avatar, DefinitionList, EmptyState, FilterBar, PageHeader, StatCard, UserCell,
 } from "@/components/ui/misc";
-import { serviceProviders, workOrders } from "@/lib/mock/data";
-import type { ServiceProvider } from "@/lib/api/types";
+import { ErrorState, TableSkeleton } from "@/components/ui/states";
+import { useApi } from "@/lib/api/hooks";
+import {
+  approveProvider, listProviderApplications, listWorkOrders, rejectProvider, suspendProvider,
+} from "@/lib/api/resources";
+import type { ApiServiceProviderApplication } from "@/lib/api/types";
 import { formatDate, humanize, money, relativeTime } from "@/lib/utils";
 
 export default function ServiceProvidersPage() {
   const [tab, setTab] = useState("pending_verification");
   const [query, setQuery] = useState("");
   const [planFilter, setPlanFilter] = useState("all");
-  const [reviewing, setReviewing] = useState<ServiceProvider | null>(null);
+  const [reviewing, setReviewing] = useState<ApiServiceProviderApplication | null>(null);
+
+  // Both endpoints are staff-only; a landlord account gets a 403 the error
+  // state explains rather than an empty table.
+  const feed = useApi(useCallback(() => listProviderApplications(), []));
+  const orders = useApi(useCallback(() => listWorkOrders(), []));
+  const [decisionNote, setDecisionNote] = useState("");
+
+  async function decide(action: () => Promise<unknown>) {
+    await action();
+    setReviewing(null);
+    setDecisionNote("");
+    feed.refetch();
+  }
+
+  const serviceProviders: ApiServiceProviderApplication[] = useMemo(
+    () => feed.data?.results ?? [],
+    [feed.data],
+  );
+  const workOrders = useMemo(() => orders.data?.results ?? [], [orders.data]);
 
   const tabs = useMemo(
     () =>
@@ -39,26 +62,25 @@ export default function ServiceProvidersPage() {
             ? serviceProviders.length
             : serviceProviders.filter((p) => p.status === t.id).length,
       })),
-    [],
+    [serviceProviders],
   );
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     return serviceProviders.filter((provider) => {
       if (tab !== "all" && provider.status !== tab) return false;
-      if (planFilter !== "all" && provider.plan !== planFilter) return false;
       if (
         q &&
-        !`${provider.businessName} ${provider.owner.fullName} ${provider.categories.join(" ")}`
+        !`${provider.businessName} ${provider.userFullName} ${provider.userEmail}`
           .toLowerCase()
           .includes(q)
       )
         return false;
       return true;
     });
-  }, [tab, query, planFilter]);
+  }, [serviceProviders, tab, query]);
 
-  const columns: Column<ServiceProvider>[] = [
+  const columns: Column<ApiServiceProviderApplication>[] = [
     {
       key: "business",
       header: "Provider",
@@ -74,7 +96,8 @@ export default function ServiceProvidersPage() {
               )}
             </span>
             <span className="text-ink-subtle block truncate text-xs">
-              {humanize(row.providerType)} · {row.categories.join(", ")}
+              {humanize(row.providerType)}
+              {row.tagline && ` · ${row.tagline}`}
             </span>
           </span>
         </span>
@@ -84,47 +107,35 @@ export default function ServiceProvidersPage() {
       key: "owner",
       header: "Owner",
       hideOnMobile: true,
-      cell: (row) => <UserCell name={row.owner.fullName} meta={row.owner.phoneNumber} />,
+      cell: (row) => <UserCell name={row.userFullName} meta={row.userEmail} />,
     },
     {
-      key: "areas",
-      header: "Service areas",
+      key: "experience",
+      header: "Experience",
+      align: "center",
       hideOnMobile: true,
+      sortValue: (row) => row.yearsExperience,
       cell: (row) => (
-        <span className="text-ink-muted flex max-w-44 items-center gap-1 truncate text-xs">
-          <MapPin className="size-3 shrink-0" />
-          {row.serviceAreas.join(", ")}
+        <span className="text-ink-muted text-[13px] tabular-nums">
+          {row.yearsExperience ? `${row.yearsExperience} yrs` : "—"}
         </span>
       ),
     },
     {
-      key: "rating",
-      header: "Rating",
-      align: "center",
-      sortValue: (row) => row.rating ?? 0,
-      cell: (row) =>
-        row.rating ? (
-          <span className="text-ink flex items-center justify-center gap-1 text-[13px] tabular-nums">
-            <Star className="size-3.5 fill-amber-400 text-amber-400" />
-            {row.rating.toFixed(1)}
-          </span>
-        ) : (
-          <span className="text-ink-subtle text-xs">New</span>
-        ),
-    },
-    {
-      key: "jobs",
-      header: "Jobs",
+      key: "docs",
+      header: "Documents",
       align: "right",
       hideOnMobile: true,
-      sortValue: (row) => row.completedJobs,
-      cell: (row) => <span className="text-ink-muted text-[13px] tabular-nums">{row.completedJobs}</span>,
+      sortValue: (row) => row.documents.length,
+      cell: (row) => (
+        <span className="text-ink-muted text-[13px] tabular-nums">{row.documents.length}</span>
+      ),
     },
     {
-      key: "plan",
-      header: "Plan",
+      key: "verification",
+      header: "Verification",
       hideOnMobile: true,
-      cell: (row) => <Badge tone="neutral">{humanize(row.plan ?? "starter")}</Badge>,
+      cell: (row) => <StatusBadge status={row.verificationStatus} />,
     },
     {
       key: "status",
@@ -168,7 +179,6 @@ export default function ServiceProvidersPage() {
         <StatCard
           label="Active providers"
           value={String(serviceProviders.filter((p) => p.status === "active").length)}
-          delta={8.3}
           icon={<Users className="size-4" />}
         />
         <StatCard
@@ -205,7 +215,13 @@ export default function ServiceProvidersPage() {
           </Select>
         </FilterBar>
 
-        {rows.length === 0 ? (
+        {feed.error ? (
+          <CardBody>
+            <ErrorState error={feed.error} onRetry={feed.refetch} resource="provider applications" />
+          </CardBody>
+        ) : feed.loading && !feed.data ? (
+          <TableSkeleton rows={6} columns={5} />
+        ) : rows.length === 0 ? (
           <CardBody>
             <EmptyState
               icon={<Users className="size-5" />}
@@ -223,6 +239,13 @@ export default function ServiceProvidersPage() {
           title="Work orders"
           description="Accepted quotes being delivered, including disputes."
         />
+        {orders.error ? (
+          <CardBody>
+            <ErrorState error={orders.error} onRetry={orders.refetch} resource="work orders" />
+          </CardBody>
+        ) : orders.loading && !orders.data ? (
+          <TableSkeleton rows={4} columns={5} />
+        ) : (
         <DataTable
           rows={workOrders}
           rowKey={(row) => row.id}
@@ -230,14 +253,14 @@ export default function ServiceProvidersPage() {
           columns={[
             {
               key: "reference",
-              header: "Reference",
+              header: "Work order",
               cell: (row) => (
                 <span>
                   <span className="text-ink block font-mono text-xs font-medium">
-                    {row.reference}
+                    WO-{row.id}
                   </span>
                   <span className="text-ink-subtle block max-w-48 truncate text-xs">
-                    {row.serviceType}
+                    {row.requestTitle}
                   </span>
                 </span>
               ),
@@ -248,7 +271,7 @@ export default function ServiceProvidersPage() {
               hideOnMobile: true,
               cell: (row) => (
                 <span className="text-ink-muted block max-w-40 truncate text-[13px]">
-                  {row.provider.businessName}
+                  {row.providerName}
                 </span>
               ),
             },
@@ -256,7 +279,7 @@ export default function ServiceProvidersPage() {
               key: "requester",
               header: "Requested by",
               hideOnMobile: true,
-              cell: (row) => <UserCell name={row.requester.fullName} />,
+              cell: (row) => <span className="text-ink-muted text-[13px]">#{row.requesterId}</span>,
             },
             {
               key: "scheduled",
@@ -264,7 +287,7 @@ export default function ServiceProvidersPage() {
               hideOnMobile: true,
               cell: (row) => (
                 <span className="text-ink-muted text-xs">
-                  {row.scheduledFor ? formatDate(row.scheduledFor) : "Not scheduled"}
+                  {row.scheduledAt ? formatDate(row.scheduledAt) : "Not scheduled"}
                 </span>
               ),
             },
@@ -272,36 +295,44 @@ export default function ServiceProvidersPage() {
               key: "amount",
               header: "Amount",
               align: "right",
-              sortValue: (row) => row.amount,
+              sortValue: (row) => Number(row.finalQuoteAmount),
               cell: (row) => (
                 <span className="text-ink text-[13px] font-medium tabular-nums">
-                  {money(row.amount)}
+                  {money(row.finalQuoteAmount)}
                 </span>
               ),
             },
             { key: "status", header: "Status", cell: (row) => <StatusBadge status={row.status} /> },
           ]}
         />
+        )}
       </Card>
 
       <Drawer
         open={reviewing != null}
         onClose={() => setReviewing(null)}
         title={reviewing?.businessName ?? ""}
-        subtitle={reviewing ? `${humanize(reviewing.providerType)} · ${reviewing.owner.email}` : ""}
+        subtitle={reviewing ? `${humanize(reviewing.providerType)} · ${reviewing.userEmail}` : ""}
         footer={
           reviewing?.status === "pending_verification" ? (
             <>
-              <Button variant="danger" onClick={() => setReviewing(null)}>
+              <Button
+                variant="danger"
+                onClick={() => decide(() => rejectProvider(reviewing.id, decisionNote))}
+              >
                 <XCircle className="size-4" /> Reject
               </Button>
-              <Button variant="primary" onClick={() => setReviewing(null)}>
+              <Button variant="primary" onClick={() => decide(() => approveProvider(reviewing.id))}>
                 <CheckCircle2 className="size-4" /> Approve provider
               </Button>
             </>
           ) : (
             <>
-              <Button variant="danger" onClick={() => setReviewing(null)}>
+              <Button
+                variant="danger"
+                disabled={!reviewing}
+                onClick={() => reviewing && decide(() => suspendProvider(reviewing.id, decisionNote))}
+              >
                 <PauseCircle className="size-4" /> Suspend
               </Button>
               <Button onClick={() => setReviewing(null)}>Close</Button>
@@ -313,33 +344,43 @@ export default function ServiceProvidersPage() {
           <div className="space-y-5">
             <div className="flex flex-wrap items-center gap-2">
               <StatusBadge status={reviewing.status} />
-              <Badge tone={reviewing.verificationStatus === "verified" ? "ok" : "warn"}>
-                {humanize(reviewing.verificationStatus)}
-              </Badge>
-              <Badge tone="neutral">{humanize(reviewing.plan ?? "starter")} plan</Badge>
+              <StatusBadge status={reviewing.verificationStatus} />
             </div>
+
+            {reviewing.bio && (
+              <p className="text-ink-muted text-[13px] leading-6">{reviewing.bio}</p>
+            )}
 
             <DefinitionList
               items={[
                 { label: "Provider ID", value: `#${reviewing.id}` },
-                { label: "Owner", value: reviewing.owner.fullName },
-                { label: "Phone", value: reviewing.owner.phoneNumber },
-                { label: "Applied", value: relativeTime(reviewing.submittedAt) },
-                { label: "Categories", value: reviewing.categories.join(", ") },
-                { label: "Service areas", value: reviewing.serviceAreas.join(", ") },
-                { label: "Completed jobs", value: String(reviewing.completedJobs) },
+                { label: "Owner", value: reviewing.userFullName },
+                { label: "Email", value: reviewing.userEmail },
+                { label: "Type", value: humanize(reviewing.providerType) },
+                { label: "Applied", value: relativeTime(reviewing.createdAt) },
                 {
-                  label: "Rating",
-                  value: reviewing.rating ? `${reviewing.rating.toFixed(1)} / 5` : "No reviews yet",
+                  label: "Experience",
+                  value: reviewing.yearsExperience ? `${reviewing.yearsExperience} years` : "—",
+                },
+                { label: "Offerings", value: String(reviewing.offerings.length) },
+                {
+                  label: "Approved",
+                  value: reviewing.approvedAt ? formatDate(reviewing.approvedAt) : "Not yet",
                 },
               ]}
             />
 
+            {reviewing.rejectionReason && (
+              <div className="bg-bad-soft border-bad/25 rounded-xl border p-3.5">
+                <p className="text-bad text-[13px] leading-5">{reviewing.rejectionReason}</p>
+              </div>
+            )}
+
             <div>
               <p className="text-ink mb-2 text-[13px] font-medium">
-                Verification documents ({reviewing.documentsCount})
+                Verification documents ({reviewing.documents.length})
               </p>
-              {reviewing.documentsCount === 0 ? (
+              {reviewing.documents.length === 0 ? (
                 <EmptyState
                   icon={<FileText className="size-5" />}
                   title="No documents uploaded"
@@ -347,35 +388,43 @@ export default function ServiceProvidersPage() {
                 />
               ) : (
                 <ul className="space-y-2">
-                  {[
-                    "National ID (front)",
-                    "National ID (back)",
-                    "Trade licence",
-                    "Utility bill",
-                    "Workplace photo",
-                    "Other",
-                  ]
-                    .slice(0, reviewing.documentsCount)
-                    .map((label) => (
-                      <li
-                        key={label}
-                        className="border-line bg-surface-muted flex items-center gap-3 rounded-lg border p-2.5"
-                      >
-                        <span className="bg-surface text-ink-subtle grid size-8 shrink-0 place-items-center rounded-md">
-                          <FileText className="size-4" />
+                  {reviewing.documents.map((document) => (
+                    <li
+                      key={document.id}
+                      className="border-line bg-surface-muted flex items-center gap-3 rounded-lg border p-2.5"
+                    >
+                      <span className="bg-surface text-ink-subtle grid size-8 shrink-0 place-items-center rounded-md">
+                        <FileText className="size-4" />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="text-ink block truncate text-[13px]">
+                          {humanize(document.documentType)}
                         </span>
-                        <span className="text-ink min-w-0 flex-1 truncate text-[13px]">{label}</span>
-                        <Button size="sm" variant="ghost">
-                          View
-                        </Button>
-                      </li>
-                    ))}
+                        {document.note && (
+                          <span className="text-ink-subtle block truncate text-xs">
+                            {document.note}
+                          </span>
+                        )}
+                      </span>
+                      {document.fileUrl && (
+                        <a href={document.fileUrl} target="_blank" rel="noreferrer">
+                          <Button size="sm" variant="ghost">
+                            View
+                          </Button>
+                        </a>
+                      )}
+                    </li>
+                  ))}
                 </ul>
               )}
             </div>
 
             <Field label="Decision note" hint="Shared with the provider when you reject or suspend.">
-              <Textarea placeholder="The trade licence has expired — please upload a current one." />
+              <Textarea
+                value={decisionNote}
+                onChange={(e) => setDecisionNote(e.target.value)}
+                placeholder="The trade licence has expired — please upload a current one."
+              />
             </Field>
           </div>
         )}

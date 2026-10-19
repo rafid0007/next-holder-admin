@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
-  BadgeCheck, GitMerge, MailWarning, ShieldCheck, ShieldOff, UserPlus, Users as UsersIcon,
+  BadgeCheck, GitMerge, MailWarning, UserPlus, Users as UsersIcon,
 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -12,12 +12,14 @@ import { Modal } from "@/components/ui/modal";
 import { DataTable, type Column } from "@/components/ui/table";
 import { Tabs } from "@/components/ui/tabs";
 import {
-  Avatar, DefinitionList, EmptyState, FilterBar, PageHeader, StatCard, UserCell,
+  Avatar, DefinitionList, EmptyState, FilterBar, PageHeader, Progress, StatCard, UserCell,
 } from "@/components/ui/misc";
-import { BarChart } from "@/components/charts/bar-chart";
-import { creditWallets, monthLabels, newUsersSeries, properties, users, userSubscriptions } from "@/lib/mock/data";
-import type { User } from "@/lib/api/types";
-import { formatDate, humanize, number, relativeTime } from "@/lib/utils";
+import { CardSkeleton, ErrorState, InlineError, TableSkeleton } from "@/components/ui/states";
+import { ApiError } from "@/lib/api/client";
+import { useApi } from "@/lib/api/hooks";
+import { listUsers, provisionTenant } from "@/lib/api/resources";
+import type { ApiUserListItem, UserRole } from "@/lib/api/types";
+import { formatDate, humanize, relativeTime } from "@/lib/utils";
 
 const roleTone = { landlord: "brand", tenant: "info", service_provider: "ok" } as const;
 
@@ -27,6 +29,13 @@ export default function UsersPage() {
   const [verified, setVerified] = useState("all");
   const [inviteOpen, setInviteOpen] = useState(false);
 
+  // `search` and `role` are server-side; the rest is filtered here.
+  const directory = useApi(useCallback(() => listUsers(), []));
+  const users: ApiUserListItem[] = useMemo(
+    () => directory.data?.results ?? [],
+    [directory.data],
+  );
+
   const tabs = useMemo(
     () => [
       { id: "all", label: "All", count: users.length },
@@ -35,14 +44,14 @@ export default function UsersPage() {
       { id: "service_provider", label: "Providers", count: users.filter((u) => u.roles.includes("service_provider")).length },
       { id: "provisional", label: "Provisional", count: users.filter((u) => u.isProvisional).length },
     ],
-    [],
+    [users],
   );
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     return users.filter((person) => {
       if (tab === "provisional" && !person.isProvisional) return false;
-      if (!["all", "provisional"].includes(tab) && !person.roles.includes(tab as User["roles"][number]))
+      if (!["all", "provisional"].includes(tab) && !person.roles.includes(tab as UserRole))
         return false;
       if (verified === "verified" && !person.isVerified) return false;
       if (verified === "unverified" && person.isVerified) return false;
@@ -51,9 +60,9 @@ export default function UsersPage() {
         return false;
       return true;
     });
-  }, [tab, query, verified]);
+  }, [users, tab, query, verified]);
 
-  const columns: Column<User>[] = [
+  const columns: Column<ApiUserListItem>[] = [
     {
       key: "name",
       header: "User",
@@ -91,31 +100,14 @@ export default function UsersPage() {
       cell: (row) => <span className="text-ink-muted text-[13px] tabular-nums">{row.phoneNumber}</span>,
     },
     {
-      key: "properties",
-      header: "Properties",
+      key: "role",
+      header: "Signed in as",
       align: "center",
       hideOnMobile: true,
-      sortValue: (row) => properties.filter((p) => p.landlord.id === row.id).length,
-      cell: (row) => {
-        const count = properties.filter((p) => p.landlord.id === row.id).length;
-        return (
-          <span className="text-ink-muted text-[13px] tabular-nums">{count > 0 ? count : "—"}</span>
-        );
-      },
-    },
-    {
-      key: "credits",
-      header: "Credits",
-      align: "right",
-      hideOnMobile: true,
-      cell: (row) => {
-        const wallet = creditWallets.find((w) => w.user.id === row.id);
-        return (
-          <span className="text-ink-muted text-[13px] tabular-nums">
-            {wallet ? number(wallet.balance) : "—"}
-          </span>
-        );
-      },
+      sortValue: (row) => row.currentRole,
+      cell: (row) => (
+        <span className="text-ink-muted text-[13px]">{humanize(row.currentRole)}</span>
+      ),
     },
     {
       key: "joined",
@@ -154,16 +146,22 @@ export default function UsersPage() {
       />
 
       <div className="mb-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        {directory.loading && !directory.data ? (
+          Array.from({ length: 4 }, (_, i) => (
+            <Card key={i}>
+              <CardSkeleton />
+            </Card>
+          ))
+        ) : (
+          <>
         <StatCard
           label="Total users"
           value={String(users.length)}
-          delta={14.2}
           icon={<UsersIcon className="size-4" />}
-          trend={newUsersSeries}
         />
         <StatCard
           label="Verified"
-          value={`${Math.round((users.filter((u) => u.isVerified).length / users.length) * 100)}%`}
+          value={users.length ? `${Math.round((users.filter((u) => u.isVerified).length / users.length) * 100)}%` : "—"}
           hint={`${users.filter((u) => !u.isVerified).length} awaiting verification`}
         />
         <StatCard
@@ -176,17 +174,33 @@ export default function UsersPage() {
           value={String(users.filter((u) => !u.isActive).length)}
           hint="no sign-in allowed"
         />
+          </>
+        )}
       </div>
 
       <div className="mb-4 grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
-          <CardHeader title="Sign-ups" description="New accounts created per month." />
-          <CardBody>
-            <BarChart
-              labels={monthLabels}
-              formatValue={(v) => String(v)}
-              series={[{ name: "New users", color: "var(--brand)", values: newUsersSeries }]}
-            />
+          <CardHeader
+            title="Roles"
+            description="How the loaded accounts break down. A user can hold more than one role."
+          />
+          <CardBody className="space-y-3.5">
+            {(["landlord", "tenant", "service_provider"] as UserRole[]).map((role, index) => {
+              const count = users.filter((u) => u.roles.includes(role)).length;
+              return (
+                <div key={role}>
+                  <div className="mb-1 flex items-baseline justify-between text-[13px]">
+                    <span className="text-ink font-medium">{humanize(role)}</span>
+                    <span className="text-ink-muted tabular-nums">{count}</span>
+                  </div>
+                  <Progress
+                    value={count}
+                    max={Math.max(users.length, 1)}
+                    tone={(["brand", "ok", "warn"] as const)[index]}
+                  />
+                </div>
+              );
+            })}
           </CardBody>
         </Card>
 
@@ -241,7 +255,13 @@ export default function UsersPage() {
           </Select>
         </FilterBar>
 
-        {rows.length === 0 ? (
+        {directory.error ? (
+          <CardBody>
+            <ErrorState error={directory.error} onRetry={directory.refetch} resource="users" />
+          </CardBody>
+        ) : directory.loading && !directory.data ? (
+          <TableSkeleton rows={6} columns={5} />
+        ) : rows.length === 0 ? (
           <CardBody>
             <EmptyState
               icon={<UsersIcon className="size-5" />}
@@ -255,80 +275,127 @@ export default function UsersPage() {
             rows={rows}
             rowKey={(row) => row.id}
             pageSize={10}
-            expandedContent={(person) => {
-              const subscription = userSubscriptions.find((s) => s.user.id === person.id);
-              const wallet = creditWallets.find((w) => w.user.id === person.id);
-              return (
-                <div className="grid gap-5 lg:grid-cols-3">
-                  <div className="lg:col-span-2">
-                    <DefinitionList
-                      items={[
-                        { label: "User ID", value: `#${person.id}` },
-                        { label: "Current role", value: humanize(person.currentRole) },
-                        { label: "Occupation", value: person.occupation || "—" },
-                        { label: "Joined", value: formatDate(person.createdAt) },
-                        {
-                          label: "Subscription",
-                          value: subscription
-                            ? `${subscription.plan.displayName} (${subscription.isActive ? "active" : "lapsed"})`
-                            : "None",
-                        },
-                        {
-                          label: "Credit balance",
-                          value: wallet ? `${number(wallet.balance)} credits` : "No wallet",
-                        },
-                        {
-                          label: "Properties owned",
-                          value: number(properties.filter((p) => p.landlord.id === person.id).length),
-                        },
-                        { label: "National ID", value: person.nationalId || "Not provided" },
-                      ]}
-                    />
-                  </div>
-                  <div className="flex flex-col gap-2">
-                    {!person.isVerified && (
-                      <Button variant="primary">
-                        <ShieldCheck className="size-4" /> Mark verified
-                      </Button>
-                    )}
-                    <Button>Grant credits</Button>
-                    <Button>Reset password</Button>
-                    <Button variant="danger">
-                      <ShieldOff className="size-4" />
-                      {person.isActive ? "Disable account" : "Re-enable account"}
-                    </Button>
-                  </div>
+            expandedContent={(person) => (
+              <div className="grid gap-5 lg:grid-cols-3">
+                <div className="lg:col-span-2">
+                  <DefinitionList
+                    items={[
+                      { label: "User ID", value: `#${person.id}` },
+                      { label: "Email", value: person.email },
+                      { label: "Phone", value: person.phoneNumber || "—" },
+                      { label: "Roles", value: person.roles.map(humanize).join(", ") },
+                      { label: "Current role", value: humanize(person.currentRole) },
+                      { label: "Joined", value: formatDate(person.createdAt) },
+                      { label: "Verified", value: person.isVerified ? "Yes" : "No" },
+                      { label: "Account", value: person.isActive ? "Active" : "Disabled" },
+                    ]}
+                  />
                 </div>
-              );
-            }}
+                <div className="flex flex-col gap-2">
+                  <p className="text-ink-subtle text-xs leading-5">
+                    Per-user properties, wallet and subscription need staff-scoped endpoints that
+                    the API does not expose yet.
+                  </p>
+                </div>
+              </div>
+            )}
           />
         )}
       </Card>
 
-      <Modal
+      <ProvisionTenantModal
         open={inviteOpen}
         onClose={() => setInviteOpen(false)}
+        onCreated={directory.refetch}
+      />
+    </>
+  );
+}
+
+function ProvisionTenantModal({
+  open,
+  onClose,
+  onCreated,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [fullName, setFullName] = useState("");
+  const [phoneNumber, setPhoneNumber] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<ApiError | null>(null);
+
+  async function submit() {
+    setBusy(true);
+    setFailure(null);
+    try {
+      await provisionTenant({ fullName, phoneNumber, contactEmail: contactEmail || undefined });
+      onCreated();
+      onClose();
+      setFullName("");
+      setPhoneNumber("");
+      setContactEmail("");
+    } catch (caught) {
+      setFailure(
+        caught instanceof ApiError ? caught : new ApiError(0, "Could not create the tenant"),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+      <Modal
+        open={open}
+        onClose={onClose}
         title="Provision a tenant"
         description="Creates a placeholder account a landlord can attach a lease to before the tenant signs up."
         footer={
           <>
-            <Button onClick={() => setInviteOpen(false)}>Cancel</Button>
-            <Button variant="primary" onClick={() => setInviteOpen(false)}>
-              Create tenant
+            <Button onClick={onClose}>Cancel</Button>
+            <Button variant="primary" disabled={busy || !fullName || !phoneNumber} onClick={submit}>
+              {busy ? "Creating…" : "Create tenant"}
             </Button>
           </>
         }
       >
         <div className="space-y-5">
-          <Field label="Full name">
-            <Input placeholder="Jahid Hasan" />
+          {failure && <InlineError error={failure} />}
+          <Field
+            label="Full name"
+            error={fieldError(failure, "fullName")}
+          >
+            <Input
+              value={fullName}
+              onChange={(e) => setFullName(e.target.value)}
+              placeholder="Jahid Hasan"
+            />
           </Field>
           <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Phone number" hint="Used to match the account at sign-up.">
-              <Input placeholder="+8801711111199" />
+            <Field
+              label="Phone number"
+              hint="Used to match the account at sign-up."
+              error={fieldError(failure, "phoneNumber")}
+            >
+              <Input
+                value={phoneNumber}
+                onChange={(e) => setPhoneNumber(e.target.value)}
+                placeholder="+8801711111199"
+              />
             </Field>
-            <Field label="Contact email" hint="Optional.">
-              <Input type="email" placeholder="jahid@example.com" />
+            <Field
+              label="Contact email"
+              hint="Optional."
+              error={fieldError(failure, "contactEmail")}
+            >
+              <Input
+                type="email"
+                value={contactEmail}
+                onChange={(e) => setContactEmail(e.target.value)}
+                placeholder="jahid@example.com"
+              />
             </Field>
           </div>
           <div className="bg-warn-soft border-warn/25 rounded-xl border p-3.5">
@@ -338,7 +405,13 @@ export default function UsersPage() {
             </p>
           </div>
         </div>
-      </Modal>
-    </>
+    </Modal>
   );
+}
+
+/** Pulls one field's message out of the backend's `details` map. */
+function fieldError(error: ApiError | null, field: string) {
+  const raw = error?.details?.[field];
+  if (!raw) return undefined;
+  return Array.isArray(raw) ? String(raw[0]) : String(raw);
 }

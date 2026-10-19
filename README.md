@@ -8,22 +8,19 @@ npm install
 npm run dev       # http://localhost:3000
 ```
 
-**`/login`, `/properties` and `/properties/[id]` read live data from the API.** Every other
-screen still renders from a fixture set in `src/lib/mock/data.ts`, shaped like the v1 serializer
-responses, so the rest of the console works without the backend running. The typed API client and
-the full endpoint map are already in place — see **Wiring it to the backend** below.
+**Every screen reads live data from the API.** There are no fixtures left in the repo. Where an
+endpoint does not exist, the screen says so in place of the data rather than inventing it — those
+gaps are catalogued in `../next-holder-backend/API-GAPS.md`.
 
 ---
 
 ## Screens
 
-✅ marks a screen that is wired to the live API; the rest read fixtures.
-
 | Route | What it covers | Backing endpoints |
 | --- | --- | --- |
 | `/` | Revenue by stream, work queue, portfolio status, rent collection, booking volume, activity feed | `landlord/finance/summary`, `landlord/reports/overview`, `bookings/reports/overview` |
-| `/properties` ✅ | Listings with status tabs, table/grid views, create flow, ownership transfers | `properties/`, `properties/transfer-requests/` |
-| `/properties/[id]` ✅ | Photo gallery, specs, amenities, marketplace toggle, units, leases, bookings, bills, maintenance, inquiries | `properties/{id}/…` plus each related list filtered by `propertyId` |
+| `/properties` | Listings with status tabs, table/grid views, create flow, ownership transfers | `properties/`, `properties/transfer-requests/` |
+| `/properties/[id]` | Photo gallery, specs, amenities, marketplace toggle, units, leases, bookings, bills, maintenance, inquiries | `properties/{id}/…` plus each related list filtered by `propertyId` |
 | `/marketplace` | Public visibility, unlock and favourite economics, per-listing engagement | `marketplace/properties/`, `…/unlock`, `…/favorite` |
 | `/leases` | Lifecycle tabs, expandable rows with activate / terminate / upload contract, create flow | `leases/`, `…/activate`, `…/terminate` |
 | `/bookings` | Approval queue, revenue and volume charts, manual bookings, availability blocks, discounts | `bookings/`, `bookings/manual`, `properties/{id}/availability-blocks` |
@@ -38,7 +35,7 @@ the full endpoint map are already in place — see **Wiring it to the backend** 
 | `/geo` | Division → district → thana → area browser, coverage, reverse lookup | `geo/divisions`, `geo/districts`, `geo/thanas`, `geo/areas`, `geo/reverse-admin` |
 | `/notifications` | Inbox, delivery channel matrix, announcement composer | `notifications/`, `…/read`, `…/read-all` |
 | `/settings` | Credit economy, property/booking defaults, verification rules, admin access, integrations | platform configuration |
-| `/login` ✅ | JWT sign-in by email or phone | `auth/signin`, `auth/token/refresh` |
+| `/login` | JWT sign-in by email or phone | `auth/signin`, `auth/token/refresh` |
 
 Shell features: collapsible grouped sidebar with live work-queue counts, ⌘K command palette
 over pages / properties / people, notification dropdown, light and dark themes.
@@ -62,7 +59,7 @@ src/
     api/types.ts            TypeScript mirror of the v1 serializers
     api/endpoints.ts        every backend route in one place
     api/client.ts           fetch wrapper: JWT, refresh-on-401, DRF error shape
-    mock/data.ts            fixture data, swap for real calls per screen
+    work-queue.ts           sidebar pending-work counts
     utils.ts                money / date / status formatters
 ```
 
@@ -80,9 +77,9 @@ work-order and verification states — onto a tone, so one component renders the
 
 ## Running against the backend
 
-Only `/login`, `/properties` and `/properties/[id]` read live data. The other screens render
-fixtures whichever backend you point at — see
-[What the current API cannot do yet](#what-the-current-api-cannot-do-yet) for why.
+Every screen reads live data. Several are scoped to the signed-in landlord rather than the whole
+platform, because the API has no staff-wide equivalent yet — see
+[What the current API cannot do yet](#what-the-current-api-cannot-do-yet).
 
 ### Against a hosted deployment
 
@@ -189,19 +186,23 @@ Two things to keep in mind when reading the responses:
 
 ### What the current API cannot do yet
 
-These are real constraints the wired screens work around, not omissions in the UI:
+Full catalogue, with suggested endpoint shapes, in **`../next-holder-backend/API-GAPS.md`**.
+The ones that shape the UI most:
 
-- **`GET /properties/` is scoped to one landlord** (`IsAuthenticated, IsLandlord`, via
-  `PropertyService.get_landlord_properties`), so the list shows the signed-in landlord's own
-  portfolio, not every property on the platform. There is no staff-wide property endpoint, and no
-  landlord field on the response — which is why the list has no landlord column.
-- **It filters only on the geo hierarchy** (`divisionId`, `districtId`, `thanaId`, `areaId`,
-  `hasGeo`). Status, category, listing type, city and free-text search are applied in the browser
-  over the full set, which `listAllProperties()` pages through at `page_size=100`. If those filters
-  land server-side, pass them through `listAllProperties` and delete the client-side pass.
-- **Several fixture-backed panels need endpoints that do not exist**: platform-wide finance (the
-  existing summary is scoped to one landlord), cross-tenant credit wallet listing, and per-listing
-  marketplace engagement counts. Each needs a staff-scoped endpoint before it can show live data.
+- **Nearly every list is scoped to the caller.** `/properties/`, `/leases/`, `/bookings/`,
+  `/rent/bills/`, `/maintenance/requests/`, `/property-inquiries/`, `/credits/wallet`,
+  `/subscriptions/me` and `/landlord/finance/summary` all filter by `request.user`. So this is a
+  landlord console today, not a platform admin panel; `IsAdminUser` exists and is used by
+  `/credits/admin/grant`, it is simply not applied to the domain lists.
+- **`GET /properties/` filters only on the geo hierarchy**, so status, category, listing type,
+  city and search run in the browser over the paged-through set.
+- **No time series anywhere**, so every chart is a proportion or a donut rather than a trend.
+- **No cross-user wallets or subscriptions**, so those two tables are empty states that explain
+  what endpoint they need.
+- **Service provider administration is staff-only**, so a landlord account sees a 403 state there.
 
-Property creation is still a form-only flow: `POST /properties/` exists and
-`PropertyCreateUpdateSerializer` defines the payload, but the modal does not submit yet.
+### Screens that show an empty state instead of data
+
+These are deliberate, and each names the endpoint it wants: the Credits "Wallets" tab, the
+Subscriptions subscriber table, and the Bookings page's availability blocks and discounts, which
+exist only under `/properties/{id}/`.

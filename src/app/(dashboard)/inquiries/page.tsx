@@ -1,22 +1,29 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import Link from "next/link";
+import { useCallback, useMemo, useState } from "react";
 import { Archive, Mail, MessageSquare, Phone, Send } from "lucide-react";
 import { Card, CardBody } from "@/components/ui/card";
-import { Badge, StatusBadge } from "@/components/ui/badge";
+import { StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SearchInput, Textarea } from "@/components/ui/field";
 import { Tabs } from "@/components/ui/tabs";
 import { Avatar, EmptyState, FilterBar, PageHeader, StatCard } from "@/components/ui/misc";
-import { inquiries } from "@/lib/mock/data";
+import { CardSkeleton, ErrorState } from "@/components/ui/states";
+import { useApi } from "@/lib/api/hooks";
+import { closeInquiry, listInquiries, replyToInquiry } from "@/lib/api/resources";
+import type { ApiInquiryListItem } from "@/lib/api/types";
 import { cn, formatDateTime, relativeTime } from "@/lib/utils";
 
 export default function InquiriesPage() {
   const [tab, setTab] = useState("open");
   const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState(inquiries[0].id);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [reply, setReply] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  // role=owner scopes to inquiries about the signed-in landlord's properties.
+  const feed = useApi(useCallback(() => listInquiries(), []));
+  const inquiries: ApiInquiryListItem[] = useMemo(() => feed.data?.results ?? [], [feed.data]);
 
   const tabs = useMemo(
     () => [
@@ -25,20 +32,43 @@ export default function InquiriesPage() {
       { id: "closed", label: "Closed", count: inquiries.filter((i) => i.status === "closed").length },
       { id: "all", label: "All", count: inquiries.length },
     ],
-    [],
+    [inquiries],
   );
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     return inquiries.filter((inquiry) => {
       if (tab !== "all" && inquiry.status !== tab) return false;
-      if (q && !`${inquiry.name} ${inquiry.message} ${inquiry.property.title}`.toLowerCase().includes(q))
+      if (q && !`${inquiry.name} ${inquiry.message} ${inquiry.propertyTitle}`.toLowerCase().includes(q))
         return false;
       return true;
     });
-  }, [tab, query]);
+  }, [inquiries, tab, query]);
 
-  const selected = inquiries.find((i) => i.id === selectedId) ?? rows[0];
+  const selected = rows.find((i) => i.id === selectedId) ?? rows[0];
+
+  async function send() {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      await replyToInquiry(selected.id, reply);
+      setReply("");
+      feed.refetch();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function close() {
+    if (!selected) return;
+    setBusy(true);
+    try {
+      await closeInquiry(selected.id);
+      feed.refetch();
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <>
@@ -54,11 +84,11 @@ export default function InquiriesPage() {
           icon={<MessageSquare className="size-4" />}
         />
         <StatCard label="Replied" value={String(inquiries.filter((i) => i.status === "replied").length)} />
-        <StatCard label="Median first reply" value="5.4 hrs" delta={-14.1} hint="faster than last month" />
+        <StatCard label="Closed" value={String(inquiries.filter((i) => i.status === "closed").length)} />
         <StatCard
-          label="From guests"
-          value={String(inquiries.filter((i) => !i.sender).length)}
-          hint="no account yet"
+          label="With a phone number"
+          value={String(inquiries.filter((i) => i.phone).length)}
+          hint="reachable directly"
         />
       </div>
 
@@ -74,7 +104,15 @@ export default function InquiriesPage() {
             />
           </FilterBar>
 
-          {rows.length === 0 ? (
+          {feed.error ? (
+            <CardBody>
+              <ErrorState error={feed.error} onRetry={feed.refetch} resource="inquiries" />
+            </CardBody>
+          ) : feed.loading && !feed.data ? (
+            <CardBody>
+              <CardSkeleton className="p-0" />
+            </CardBody>
+          ) : rows.length === 0 ? (
             <CardBody>
               <EmptyState
                 icon={<MessageSquare className="size-5" />}
@@ -105,7 +143,7 @@ export default function InquiriesPage() {
                         </span>
                       </span>
                       <span className="text-ink-subtle mt-0.5 block truncate text-xs">
-                        {inquiry.property.title}
+                        {inquiry.propertyTitle}
                       </span>
                       <span className="text-ink-muted mt-1 line-clamp-2 block text-xs leading-5">
                         {inquiry.message}
@@ -142,19 +180,14 @@ export default function InquiriesPage() {
                 </div>
                 <div className="flex shrink-0 items-center gap-2">
                   <StatusBadge status={selected.status} />
-                  {!selected.sender && <Badge tone="warn">Guest</Badge>}
+
                 </div>
               </div>
 
               <CardBody className="space-y-5">
                 <div className="bg-surface-muted border-line rounded-xl border p-4">
                   <p className="text-ink-subtle text-xs">About</p>
-                  <Link
-                    href={`/properties/${selected.property.id}`}
-                    className="text-ink focus-ring mt-1 block text-[13px] font-medium hover:underline"
-                  >
-                    {selected.property.title}
-                  </Link>
+                  <p className="text-ink mt-1 text-[13px] font-medium">{selected.propertyTitle}</p>
                 </div>
 
                 <div>
@@ -168,21 +201,7 @@ export default function InquiriesPage() {
                     </div>
                   </div>
 
-                  {selected.repliesCount > 0 && (
-                    <div className="mt-3 flex gap-3">
-                      <Avatar name="Rafid Mostafa" size="sm" />
-                      <div className="bg-brand-soft min-w-0 flex-1 rounded-xl p-3.5">
-                        <p className="text-ink text-[13px] leading-6">
-                          Thanks for reaching out. The unit is available from the 1st and I can
-                          arrange a viewing this Saturday afternoon.
-                        </p>
-                        <p className="text-ink-subtle mt-2 text-[11px]">
-                          {selected.repliesCount} repl{selected.repliesCount === 1 ? "y" : "ies"} in
-                          this thread
-                        </p>
-                      </div>
-                    </div>
-                  )}
+
                 </div>
 
                 <div>
@@ -193,10 +212,14 @@ export default function InquiriesPage() {
                     placeholder="Write a reply to the sender…"
                   />
                   <div className="mt-3 flex items-center gap-2">
-                    <Button variant="primary" disabled={reply.trim().length === 0}>
+                    <Button
+                      variant="primary"
+                      disabled={busy || reply.trim().length === 0}
+                      onClick={send}
+                    >
                       <Send className="size-4" /> Send reply
                     </Button>
-                    <Button>
+                    <Button disabled={busy || selected.status === "closed"} onClick={close}>
                       <Archive className="size-4" /> Close inquiry
                     </Button>
                   </div>

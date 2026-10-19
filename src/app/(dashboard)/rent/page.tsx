@@ -1,7 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import Link from "next/link";
+import { useCallback, useMemo, useState } from "react";
 import {
   Banknote, CalendarClock, CheckCircle2, FileText, Plus, Receipt, RefreshCcw, XCircle,
 } from "lucide-react";
@@ -16,16 +15,31 @@ import {
   DefinitionList, EmptyState, FilterBar, PageHeader, Progress, StatCard, UserCell,
 } from "@/components/ui/misc";
 import { Donut } from "@/components/charts/donut";
-import { NOW, billSchedules, leases, rentBills } from "@/lib/mock/data";
-import type { RentBill } from "@/lib/api/types";
+import { CardSkeleton, ErrorState, TableSkeleton } from "@/components/ui/states";
+import { useApi } from "@/lib/api/hooks";
+import {
+  cancelBillSchedule, listBillSchedules, listBills, listLeases, verifyBillPayment,
+} from "@/lib/api/resources";
+import type { ApiRentBill } from "@/lib/api/types";
 import { formatDate, formatDateTime, humanize, money } from "@/lib/utils";
 
 export default function RentPage() {
   const [tab, setTab] = useState("pending_verification");
   const [query, setQuery] = useState("");
   const [billType, setBillType] = useState("all");
-  const [reviewing, setReviewing] = useState<RentBill | null>(null);
+  const [reviewing, setReviewing] = useState<ApiRentBill | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
+  const [verifyNote, setVerifyNote] = useState("");
+
+  const feed = useApi(
+    useCallback(async () => ({ page: await listBills(), fetchedAt: Date.now() }), []),
+  );
+  const schedules = useApi(useCallback(() => listBillSchedules(), []));
+  const leaseFeed = useApi(useCallback(() => listLeases(), []));
+
+  const rentBills: ApiRentBill[] = useMemo(() => feed.data?.page.results ?? [], [feed.data]);
+  const billSchedules = useMemo(() => schedules.data?.results ?? [], [schedules.data]);
+  const leases = useMemo(() => leaseFeed.data?.results ?? [], [leaseFeed.data]);
 
   const tabs = useMemo(
     () =>
@@ -39,7 +53,7 @@ export default function RentPage() {
         ...t,
         count: t.id === "all" ? rentBills.length : rentBills.filter((b) => b.status === t.id).length,
       })),
-    [],
+    [rentBills],
   );
 
   const rows = useMemo(() => {
@@ -47,21 +61,23 @@ export default function RentPage() {
     return rentBills.filter((bill) => {
       if (tab !== "all" && bill.status !== tab) return false;
       if (billType !== "all" && bill.billType !== billType) return false;
-      if (q && !`${bill.title} ${bill.property.title} ${bill.tenant.fullName}`.toLowerCase().includes(q))
+      if (q && !`${bill.title} ${bill.propertyTitle} ${bill.tenant.fullName}`.toLowerCase().includes(q))
         return false;
       return true;
     });
-  }, [tab, query, billType]);
+  }, [rentBills, tab, query, billType]);
 
-  const totals = (statuses: RentBill["status"][]) =>
-    rentBills.filter((b) => statuses.includes(b.status)).reduce((sum, b) => sum + b.amount, 0);
+  const totals = (statuses: ApiRentBill["status"][]) =>
+    rentBills
+      .filter((b) => statuses.includes(b.status))
+      .reduce((sum, b) => sum + Number(b.amount), 0);
 
   const collected = totals(["paid"]);
   const overdue = totals(["overdue"]);
   const pending = totals(["pending_verification"]);
   const unpaid = totals(["unpaid"]);
 
-  const columns: Column<RentBill>[] = [
+  const columns: Column<ApiRentBill>[] = [
     {
       key: "title",
       header: "Bill",
@@ -80,12 +96,9 @@ export default function RentPage() {
       header: "Property",
       hideOnMobile: true,
       cell: (row) => (
-        <Link
-          href={`/properties/${row.property.id}`}
-          className="focus-ring text-ink-muted block max-w-44 truncate text-[13px] hover:underline"
-        >
-          {row.property.title}
-        </Link>
+        <span className="text-ink-muted block max-w-44 truncate text-[13px]">
+          {row.propertyTitle}
+        </span>
       ),
     },
     {
@@ -101,7 +114,7 @@ export default function RentPage() {
       sortValue: (row) => row.dueDate,
       cell: (row) => {
         const late =
-          new Date(row.dueDate).getTime() < NOW &&
+          new Date(row.dueDate).getTime() < (feed.data?.fetchedAt ?? 0) &&
           !["paid", "cancelled"].includes(row.status);
         return (
           <span className={late ? "text-bad text-xs font-medium" : "text-ink-muted text-xs"}>
@@ -114,7 +127,7 @@ export default function RentPage() {
       key: "amount",
       header: "Amount",
       align: "right",
-      sortValue: (row) => row.amount,
+      sortValue: (row) => Number(row.amount),
       cell: (row) => (
         <span className="text-ink text-[13px] font-medium tabular-nums">{money(row.amount)}</span>
       ),
@@ -174,10 +187,20 @@ export default function RentPage() {
       />
 
       <div className="mb-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Collected" value={money(collected)} delta={9.1} icon={<Banknote className="size-4" />} />
+        {feed.loading && !feed.data ? (
+          Array.from({ length: 4 }, (_, i) => (
+            <Card key={i}>
+              <CardSkeleton />
+            </Card>
+          ))
+        ) : (
+          <>
+        <StatCard label="Collected" value={money(collected)} icon={<Banknote className="size-4" />} />
         <StatCard label="Awaiting verification" value={money(pending)} hint={`${rentBills.filter((b) => b.status === "pending_verification").length} proofs`} />
         <StatCard label="Unpaid" value={money(unpaid)} hint="not yet due" />
-        <StatCard label="Overdue" value={money(overdue)} delta={-3.2} hint="chase these" />
+        <StatCard label="Overdue" value={money(overdue)} hint="chase these" />
+          </>
+        )}
       </div>
 
       <div className="mb-4 grid gap-4 lg:grid-cols-3">
@@ -259,7 +282,13 @@ export default function RentPage() {
           </Select>
         </FilterBar>
 
-        {rows.length === 0 ? (
+        {feed.error ? (
+          <CardBody>
+            <ErrorState error={feed.error} onRetry={feed.refetch} resource="bills" />
+          </CardBody>
+        ) : feed.loading && !feed.data ? (
+          <TableSkeleton rows={6} columns={6} />
+        ) : rows.length === 0 ? (
           <CardBody>
             <EmptyState
               icon={<FileText className="size-5" />}
@@ -278,6 +307,9 @@ export default function RentPage() {
           description="Bills generated automatically on each cycle."
           action={<Button size="sm">New schedule</Button>}
         />
+        {schedules.loading && !schedules.data ? (
+          <TableSkeleton rows={4} columns={5} />
+        ) : (
         <DataTable
           rows={billSchedules}
           rowKey={(row) => row.id}
@@ -301,7 +333,7 @@ export default function RentPage() {
               hideOnMobile: true,
               cell: (row) => (
                 <span className="text-ink-muted block max-w-44 truncate text-[13px]">
-                  {row.property.title}
+                  {row.propertyTitle}
                 </span>
               ),
             },
@@ -342,26 +374,48 @@ export default function RentPage() {
               align: "right",
               cell: (row) =>
                 row.isActive ? (
-                  <Button size="sm" variant="ghost">
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={async () => {
+                      await cancelBillSchedule(row.id);
+                      schedules.refetch();
+                    }}
+                  >
                     <RefreshCcw className="size-3.5" /> Cancel
                   </Button>
                 ) : null,
             },
           ]}
         />
+        )}
       </Card>
 
       <Drawer
         open={reviewing != null}
         onClose={() => setReviewing(null)}
         title={reviewing ? `Verify ${reviewing.title}` : ""}
-        subtitle={reviewing?.property.title}
+        subtitle={reviewing?.propertyTitle}
         footer={
           <>
-            <Button variant="danger" onClick={() => setReviewing(null)}>
+            <Button
+              variant="danger"
+              onClick={async () => {
+                if (reviewing) await verifyBillPayment(reviewing.id, false, verifyNote);
+                setReviewing(null);
+                feed.refetch();
+              }}
+            >
               <XCircle className="size-4" /> Reject
             </Button>
-            <Button variant="primary" onClick={() => setReviewing(null)}>
+            <Button
+              variant="primary"
+              onClick={async () => {
+                if (reviewing) await verifyBillPayment(reviewing.id, true);
+                setReviewing(null);
+                feed.refetch();
+              }}
+            >
               <CheckCircle2 className="size-4" /> Approve payment
             </Button>
           </>
@@ -375,10 +429,10 @@ export default function RentPage() {
                 {money(reviewing.amount)}
               </p>
               {reviewing.paymentProof &&
-                reviewing.paymentProof.paidAmount !== reviewing.amount && (
+                Number(reviewing.paymentProof.paidAmount) !== Number(reviewing.amount) && (
                   <p className="text-bad mt-1.5 text-[13px]">
                     Tenant reported {money(reviewing.paymentProof.paidAmount)} — a shortfall of{" "}
-                    {money(reviewing.amount - reviewing.paymentProof.paidAmount)}.
+                    {money(Number(reviewing.amount) - Number(reviewing.paymentProof.paidAmount))}.
                   </p>
                 )}
             </div>
@@ -428,7 +482,11 @@ export default function RentPage() {
             </div>
 
             <Field label="Rejection note" hint="Shown to the tenant if you reject the proof.">
-              <Textarea placeholder="The reference number does not match our bank statement." />
+              <Textarea
+                value={verifyNote}
+                onChange={(e) => setVerifyNote(e.target.value)}
+                placeholder="The reference number does not match our bank statement."
+              />
             </Field>
           </div>
         )}
@@ -455,7 +513,7 @@ export default function RentPage() {
                 .filter((l) => l.status === "active")
                 .map((lease) => (
                   <option key={lease.id} value={lease.id}>
-                    {lease.property.title} — {lease.tenant.fullName}
+                    {lease.propertyTitle} — {lease.tenant.fullName}
                   </option>
                 ))}
             </Select>

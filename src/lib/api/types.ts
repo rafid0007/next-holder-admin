@@ -793,3 +793,310 @@ export interface ApiArea extends ApiThana {
   thanaId: number;
   thanaName: string;
 }
+
+/* ---------------------- accounts, notifications ------------------------- */
+
+export interface ApiUserListItem {
+  id: number;
+  email: string;
+  fullName: string;
+  phoneNumber: string;
+  roles: UserRole[];
+  currentRole: UserRole;
+  profileImage: string | null;
+  isVerified: boolean;
+  isActive: boolean;
+  isProvisional: boolean;
+  createdAt: string;
+}
+
+export interface ApiNotification {
+  id: number;
+  type: NotificationType;
+  title: string;
+  message: string;
+  targetUrl: string;
+  isRead: boolean;
+  createdAt: string;
+}
+
+/* ------------------------ credits, subscriptions ------------------------ */
+
+export interface ApiCreditPackage {
+  id: number;
+  name: string;
+  credits: number;
+  price: string;
+  isActive: boolean;
+}
+
+/** `GET /credits/wallet` — the authenticated user's own wallet only. */
+export interface ApiCreditWallet {
+  id: number;
+  balance: number;
+  scopeBalances: Record<string, number>;
+}
+
+export interface ApiCreditTransaction {
+  id: number;
+  transactionType: CreditTransactionType;
+  scope: string;
+  sourceType: string;
+  amount: number;
+  balanceAfter: number;
+  description: string;
+  referenceId: string;
+  createdAt: string;
+}
+
+export interface ApiSubscriptionPlan {
+  id: number;
+  tier: SubscriptionTier;
+  displayName: string;
+  maxProperties: number;
+  monthlyCredits: number;
+  priceMonthly: string;
+  priceYearly: string;
+  features: Record<string, unknown>;
+  isActive: boolean;
+}
+
+/** `GET /subscriptions/me` — the authenticated user's own subscription. */
+export interface ApiUserSubscription {
+  id: number;
+  plan: ApiSubscriptionPlan;
+  startDate: string;
+  endDate: string | null;
+  isActive: boolean;
+  autoRenew: boolean;
+  createdAt: string;
+}
+
+/* --------------------------------- geo ---------------------------------- */
+
+export interface ApiDivision {
+  id: number;
+  name: string;
+  slug: string;
+  latitude: string | null;
+  longitude: string | null;
+}
+
+export interface ApiDistrict extends ApiDivision {
+  divisionId: number;
+  divisionName: string;
+}
+
+export interface ApiThana extends ApiDivision {
+  districtId: number;
+  districtName: string;
+  divisionId: number;
+  divisionName: string;
+}
+
+export interface ApiArea extends ApiDivision {
+  areaType: string;
+  thanaId: number;
+  thanaName: string;
+  districtId: number;
+  districtName: string;
+  divisionId: number;
+  divisionName: string;
+}
+
+/* ------------------------------ marketplace ----------------------------- */
+
+export interface ApiMarketplaceProperty {
+  id: number;
+  title: string;
+  description: string;
+  propertyCategory: PropertyCategory;
+  propertyType: PropertyType;
+  listingType: ListingType;
+  division: ApiGeoNode | null;
+  district: ApiGeoNode | null;
+  thana: ApiGeoNode | null;
+  area: ApiGeoNode | null;
+  city: string;
+  state: string;
+  neighborhood: string;
+  country: string;
+  rentAmount: string;
+  areaSqft: string | null;
+  bedrooms: number;
+  bathrooms: number;
+  balconies: number;
+  amenities: Amenity[];
+  primaryImage: ApiPropertyImage | null;
+  isUnlocked: boolean;
+  isFavorited: boolean;
+  viewCount: number;
+  unitCount: number;
+  hasUnits: boolean;
+  hasSlotTemplates: boolean;
+  lowestBookingPrice: string | null;
+  highestBookingPrice: string | null;
+  minCapacity: number | null;
+  maxCapacity: number | null;
+}
+
+/* --------------------------- finance & reports -------------------------- */
+
+export interface ApiLandlordFinanceSummary {
+  totalIncome: string;
+  rentIncome: string;
+  bookingIncome: string;
+  saleIncome: string;
+  pendingPayments: string;
+  overduePayments: string;
+  netIncome: string;
+}
+
+export interface ApiLandlordFinanceTransaction {
+  id: number;
+  source: string;
+  type: string;
+  amount: string;
+  status: string;
+  propertyTitle: string;
+  description: string;
+  date: string;
+}
+
+export interface ApiLandlordReportOverview {
+  totalProperties: number;
+  listedProperties: number;
+  occupiedProperties: number;
+  activeTenants: number;
+  activeLeases: number;
+  pendingMaintenanceRequests: number;
+  unpaidBills: number;
+  totalUnpaidAmount: string;
+  totalConfirmedBookings: number;
+}
+
+export interface ApiBookingFinanceSummary {
+  period: { startDate: string | null; endDate: string | null };
+  totalBookings: number;
+  confirmedBookings: number;
+  totalRevenue: string;
+  paidRevenue: string;
+  pendingRevenue: string;
+  refundedAmount: string;
+}
+
+export interface ApiBookingReportOverview {
+  totalBookings: number;
+  byStatus: Record<string, number>;
+  revenue: string;
+  cancellationRate: number;
+  averageConfirmationHours: number;
+}
+
+/* ---------------------------- rent schedules ---------------------------- */
+
+export interface ApiBillSchedule {
+  id: number;
+  propertyTitle: string;
+  tenant: ApiContact;
+  billType: BillType;
+  title: string;
+  amount: string;
+  frequency: BillFrequency;
+  nextDueDate: string;
+  endDate: string | null;
+  isActive: boolean;
+  createdAt: string;
+}
+
+/* --------------------------- service providers -------------------------- */
+
+export interface ApiServiceProviderDocument {
+  id: number;
+  documentType: string;
+  fileUrl: string | null;
+  note: string;
+  uploadedAt: string;
+}
+
+export interface ApiServiceOffering {
+  id: number;
+  [key: string]: unknown;
+}
+
+/** `GET /service-providers/admin/applications/` — staff only. */
+export interface ApiServiceProviderApplication {
+  id: number;
+  userId: number;
+  userEmail: string;
+  userFullName: string;
+  providerType: "individual" | "organization";
+  businessName: string;
+  tagline: string;
+  bio: string;
+  yearsExperience: number;
+  status: ProviderStatus;
+  verificationStatus: VerificationStatus;
+  rejectionReason: string;
+  approvedAt: string | null;
+  createdAt: string;
+  documents: ApiServiceProviderDocument[];
+  offerings: ApiServiceOffering[];
+}
+
+export interface ApiServiceWorkOrder {
+  id: number;
+  requestId: number;
+  requestTitle: string;
+  acceptedQuoteId: number | null;
+  providerId: number;
+  providerName: string;
+  requesterId: number;
+  finalQuoteAmount: string;
+  providerCreditsSpent: number;
+  relatedPropertyId: number | null;
+  status: WorkOrderStatus;
+  scheduledAt: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  confirmedAt: string | null;
+  closedAt: string | null;
+  hasReview: boolean;
+  requesterContact: Record<string, unknown> | null;
+  createdAt: string;
+}
+
+export interface ApiServiceArea {
+  id: number;
+  name: string;
+  city: string;
+  areaType: string;
+  thanaId: number | null;
+  districtId: number | null;
+  areaMultiplier: string;
+  isActive: boolean;
+}
+
+export interface ApiServiceCategory {
+  id: number;
+  name: string;
+  slug: string;
+  description: string;
+  icon: string;
+  order: number;
+  isActive: boolean;
+  types: { id: number; name: string; slug: string; isActive: boolean }[];
+}
+
+/** `MaintenanceRequestSerializer` — the detail endpoint, with thread and media. */
+export interface ApiMaintenanceDetail extends ApiMaintenanceListItem {
+  description: string;
+  updatedAt: string;
+  media: { id: number; fileUrl: string | null; uploadedAt: string }[];
+  comments: {
+    id: number;
+    message: string;
+    createdAt: string;
+    author?: { id: number; fullName: string } | null;
+  }[];
+}

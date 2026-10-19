@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Building2, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import { navSections } from "./nav";
-import { badgeCounts } from "@/lib/mock/data";
+import { useWorkQueue, type WorkQueue } from "@/lib/api/work-queue";
 import { cn } from "@/lib/utils";
 
 function isActive(pathname: string, href: string) {
@@ -14,9 +14,11 @@ function isActive(pathname: string, href: string) {
 export function SidebarContent({
   collapsed,
   onNavigate,
+  counts,
 }: {
   collapsed: boolean;
   onNavigate?: () => void;
+  counts: WorkQueue;
 }) {
   const pathname = usePathname();
 
@@ -32,7 +34,7 @@ export function SidebarContent({
           <ul className="space-y-0.5">
             {section.items.map((item) => {
               const active = isActive(pathname, item.href);
-              const count = item.badgeKey ? badgeCounts[item.badgeKey] : 0;
+              const count = (item.badgeKey ? counts[item.badgeKey] : 0) ?? 0;
               return (
                 <li key={item.href}>
                   <Link
@@ -112,6 +114,8 @@ export function Sidebar({
   mobileOpen: boolean;
   onCloseMobile: () => void;
 }) {
+  const counts = useWorkQueue();
+
   return (
     <>
       {/* Desktop rail */}
@@ -139,7 +143,7 @@ export function Sidebar({
             </button>
           )}
         </div>
-        <SidebarContent collapsed={collapsed} />
+        <SidebarContent collapsed={collapsed} counts={counts} />
         {collapsed && (
           <div className="border-line border-t p-3">
             <button
@@ -178,7 +182,7 @@ export function Sidebar({
                 <X className="size-4" />
               </button>
             </div>
-            <SidebarContent collapsed={false} onNavigate={onCloseMobile} />
+            <SidebarContent collapsed={false} onNavigate={onCloseMobile} counts={counts} />
           </aside>
         </div>
       )}

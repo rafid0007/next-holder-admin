@@ -1,39 +1,91 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Building2, MapPin, MapPinned, Plus, Search } from "lucide-react";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Field, Input, SearchInput, Select } from "@/components/ui/field";
 import { Modal } from "@/components/ui/modal";
 import { DataTable } from "@/components/ui/table";
 import { Tabs } from "@/components/ui/tabs";
 import { EmptyState, FilterBar, PageHeader, Progress, StatCard } from "@/components/ui/misc";
-import { geoAreas, geoDistricts, geoRows, geoThanas, properties } from "@/lib/mock/data";
-import type { GeoRow } from "@/lib/api/types";
+import { useApi, useApiWhen } from "@/lib/api/hooks";
+import { listAllProperties, listAreas, listDistricts, listDivisions, listThanas } from "@/lib/api/resources";
+import { CardSkeleton, ErrorState, TableSkeleton } from "@/components/ui/states";
+import type { ApiArea, ApiDistrict, ApiDivision, ApiThana } from "@/lib/api/types";
+
+/** One row shape for all four levels, so a single table renders any of them. */
+interface GeoRow {
+  id: number;
+  name: string;
+  parent?: string;
+  level: "division" | "district" | "thana" | "area";
+}
 import { humanize, number } from "@/lib/utils";
 
-const levels = {
-  division: geoRows,
-  district: geoDistricts,
-  thana: geoThanas,
-  area: geoAreas,
-} as const;
+type Level = "division" | "district" | "thana" | "area";
 
 export default function GeoPage() {
-  const [tab, setTab] = useState<keyof typeof levels>("division");
+  const [tab, setTab] = useState<Level>("division");
   const [query, setQuery] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
 
-  const rows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return levels[tab].filter(
-      (row) => !q || `${row.name} ${row.parent ?? ""}`.toLowerCase().includes(q),
-    );
-  }, [tab, query]);
+  // Divisions drive the coverage panel, so they always load. The deeper levels
+  // are unfiltered full lists — areas alone run to tens of thousands of rows —
+  // so each only loads when its tab is opened.
+  const divisions = useApi(useCallback(() => listDivisions(), []));
+  const districts = useApiWhen(tab === "district", useCallback(() => listDistricts(), []));
+  const thanas = useApiWhen(tab === "thana", useCallback(() => listThanas(), []));
+  const areas = useApiWhen(tab === "area", useCallback(() => listAreas(), []));
+  const portfolio = useApi(useCallback(() => listAllProperties(), []));
 
-  const covered = geoRows.filter((d) => (d.propertiesCount ?? 0) > 0).length;
+  const active =
+    tab === "division" ? divisions : tab === "district" ? districts : tab === "thana" ? thanas : areas;
+
+  const rows = useMemo<GeoRow[]>(() => {
+    const q = query.trim().toLowerCase();
+    const mapped: GeoRow[] =
+      tab === "division"
+        ? ((divisions.data as ApiDivision[] | null) ?? []).map((d) => ({
+            id: d.id,
+            name: d.name,
+            level: "division" as const,
+          }))
+        : tab === "district"
+          ? ((districts.data as ApiDistrict[] | null) ?? []).map((d) => ({
+              id: d.id,
+              name: d.name,
+              parent: d.divisionName,
+              level: "district" as const,
+            }))
+          : tab === "thana"
+            ? ((thanas.data as ApiThana[] | null) ?? []).map((t) => ({
+                id: t.id,
+                name: t.name,
+                parent: t.districtName,
+                level: "thana" as const,
+              }))
+            : ((areas.data as ApiArea[] | null) ?? []).map((a) => ({
+                id: a.id,
+                name: a.name,
+                parent: a.thanaName,
+                level: "area" as const,
+              }));
+    return mapped.filter((row) => !q || `${row.name} ${row.parent ?? ""}`.toLowerCase().includes(q));
+  }, [tab, query, divisions.data, districts.data, thanas.data, areas.data]);
+
+  /** Listings per division, counted from the landlord's own portfolio. */
+  const byDivision = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const property of portfolio.data ?? []) {
+      const name = property.division?.name;
+      if (name) counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    return counts;
+  }, [portfolio.data]);
+
+  const divisionRows = divisions.data ?? [];
+  const covered = divisionRows.filter((d) => (byDivision.get(d.name) ?? 0) > 0).length;
 
   return (
     <>
@@ -50,15 +102,31 @@ export default function GeoPage() {
       <div className="mb-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Divisions"
-          value={String(geoRows.length)}
+          value={String(divisionRows.length)}
           hint={`${covered} with listings`}
           icon={<MapPinned className="size-4" />}
         />
-        <StatCard label="Districts" value={String(geoDistricts.length)} hint="loaded in reference data" />
-        <StatCard label="Thanas" value={String(geoThanas.length)} />
+        <StatCard
+          label="Districts"
+          value={districts.data ? String(districts.data.length) : "—"}
+          hint={districts.data ? "loaded" : "open the tab to load"}
+        />
+        <StatCard
+          label="Thanas"
+          value={thanas.data ? String(thanas.data.length) : "—"}
+          hint={thanas.data ? "loaded" : "open the tab to load"}
+        />
         <StatCard
           label="Mapped properties"
-          value={`${Math.round((properties.filter((p) => p.holding?.division).length / properties.length) * 100)}%`}
+          value={
+            (portfolio.data ?? []).length
+              ? `${Math.round(
+                  ((portfolio.data ?? []).filter((p) => p.division).length /
+                    (portfolio.data ?? []).length) *
+                    100,
+                )}%`
+              : "—"
+          }
           hint="have a full address chain"
         />
       </div>
@@ -70,24 +138,27 @@ export default function GeoPage() {
             description="Where the platform's listings actually are."
           />
           <CardBody className="space-y-3.5">
-            {[...geoRows]
-              .sort((a, b) => (b.propertiesCount ?? 0) - (a.propertiesCount ?? 0))
-              .map((division) => (
-                <div key={division.id}>
-                  <div className="mb-1 flex items-baseline justify-between text-[13px]">
-                    <span className="text-ink font-medium">{division.name}</span>
-                    <span className="text-ink-muted tabular-nums">
-                      {number(division.propertiesCount)} listings ·{" "}
-                      {number(division.childrenCount)} districts
-                    </span>
-                  </div>
-                  <Progress
-                    value={division.propertiesCount ?? 0}
-                    max={Math.max(...geoRows.map((d) => d.propertiesCount ?? 0))}
-                    tone={(division.propertiesCount ?? 0) > 0 ? "brand" : "warn"}
-                  />
-                </div>
-              ))}
+            {divisions.loading && !divisions.data ? (
+              <CardSkeleton className="p-0" />
+            ) : (
+              [...divisionRows]
+                .sort((a, b) => (byDivision.get(b.name) ?? 0) - (byDivision.get(a.name) ?? 0))
+                .map((division) => {
+                  const count = byDivision.get(division.name) ?? 0;
+                  const peak = Math.max(1, ...divisionRows.map((d) => byDivision.get(d.name) ?? 0));
+                  return (
+                    <div key={division.id}>
+                      <div className="mb-1 flex items-baseline justify-between text-[13px]">
+                        <span className="text-ink font-medium">{division.name}</span>
+                        <span className="text-ink-muted tabular-nums">
+                          {number(count)} listings
+                        </span>
+                      </div>
+                      <Progress value={count} max={peak} tone={count > 0 ? "brand" : "warn"} />
+                    </div>
+                  );
+                })
+            )}
           </CardBody>
         </Card>
 
@@ -126,13 +197,12 @@ export default function GeoPage() {
 
       <Card>
         <Tabs
-          items={(Object.keys(levels) as (keyof typeof levels)[]).map((level) => ({
+          items={(["division", "district", "thana", "area"] as Level[]).map((level) => ({
             id: level,
             label: `${humanize(level)}s`,
-            count: levels[level].length,
           }))}
           value={tab}
-          onChange={(id) => setTab(id as keyof typeof levels)}
+          onChange={(id) => setTab(id as Level)}
           className="px-3"
         />
         <FilterBar>
@@ -144,7 +214,13 @@ export default function GeoPage() {
           />
         </FilterBar>
 
-        {rows.length === 0 ? (
+        {active.error ? (
+          <CardBody>
+            <ErrorState error={active.error} onRetry={active.refetch} resource="locations" />
+          </CardBody>
+        ) : active.loading && !active.data ? (
+          <TableSkeleton rows={8} columns={4} />
+        ) : rows.length === 0 ? (
           <CardBody>
             <EmptyState
               icon={<MapPinned className="size-5" />}
@@ -183,37 +259,24 @@ export default function GeoPage() {
                 ),
               },
               {
-                key: "children",
-                header: "Children",
-                align: "right",
-                hideOnMobile: true,
-                sortValue: (row) => row.childrenCount ?? 0,
-                cell: (row) => (
-                  <span className="text-ink-muted text-[13px] tabular-nums">
-                    {row.childrenCount != null ? number(row.childrenCount) : "—"}
-                  </span>
-                ),
-              },
-              {
                 key: "properties",
-                header: "Listings",
+                header: "In portfolio",
                 align: "right",
-                sortValue: (row) => row.propertiesCount ?? 0,
-                cell: (row) => (
-                  <span className="text-ink flex items-center justify-end gap-1 text-[13px] tabular-nums">
-                    <Building2 className="text-ink-subtle size-3.5" />
-                    {number(row.propertiesCount ?? 0)}
-                  </span>
-                ),
-              },
-              {
-                key: "state",
-                header: "State",
-                cell: (row) => (
-                  <Badge tone={(row.propertiesCount ?? 0) > 0 ? "ok" : "neutral"}>
-                    {(row.propertiesCount ?? 0) > 0 ? "In use" : "No listings"}
-                  </Badge>
-                ),
+                cell: (row) => {
+                  const count = (portfolio.data ?? []).filter(
+                    (p) =>
+                      p.division?.name === row.name ||
+                      p.district?.name === row.name ||
+                      p.thana?.name === row.name ||
+                      p.area?.name === row.name,
+                  ).length;
+                  return (
+                    <span className="text-ink flex items-center justify-end gap-1 text-[13px] tabular-nums">
+                      <Building2 className="text-ink-subtle size-3.5" />
+                      {number(count)}
+                    </span>
+                  );
+                },
               },
             ]}
           />
@@ -246,7 +309,7 @@ export default function GeoPage() {
           </Field>
           <Field label="Parent" hint="Leave blank only for a division.">
             <Select>
-              {geoRows.map((division) => (
+              {divisionRows.map((division) => (
                 <option key={division.id} value={division.id}>
                   {division.name}
                 </option>

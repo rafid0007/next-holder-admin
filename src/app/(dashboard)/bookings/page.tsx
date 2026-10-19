@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import {
   Ban, CalendarCheck, CheckCircle2, CircleDollarSign, Plus, Receipt, Tag, Undo2, XCircle,
@@ -13,20 +13,28 @@ import { Modal } from "@/components/ui/modal";
 import { DataTable, type Column } from "@/components/ui/table";
 import { Tabs } from "@/components/ui/tabs";
 import {
-  DefinitionList, EmptyState, FilterBar, PageHeader, StatCard, UserCell,
+  DefinitionList, EmptyState, FilterBar, PageHeader, Progress, StatCard, UserCell,
 } from "@/components/ui/misc";
-import { BarChart } from "@/components/charts/bar-chart";
+import { CardSkeleton, ErrorState, TableSkeleton } from "@/components/ui/states";
+import { useApi } from "@/lib/api/hooks";
 import {
-  availabilityBlocks, bookingDiscounts, bookingVolumeSeries, bookings, monthLabels, properties,
-  propertyUnits, revenueSeries,
-} from "@/lib/mock/data";
-import type { Booking } from "@/lib/api/types";
-import { formatDate, formatDateTime, humanize, money } from "@/lib/utils";
+  cancelBooking, confirmBooking, getBookingFinanceSummary, getBookingReportOverview,
+  listAllProperties, listBookings, listUnits, rejectBooking,
+} from "@/lib/api/resources";
+import type { ApiBookingListItem } from "@/lib/api/types";
+import { formatDateTime, humanize, money } from "@/lib/utils";
 
 export default function BookingsPage() {
   const [tab, setTab] = useState("pending");
   const [query, setQuery] = useState("");
   const [manualOpen, setManualOpen] = useState(false);
+
+  const feed = useApi(useCallback(() => listBookings(), []));
+  const finance = useApi(useCallback(() => getBookingFinanceSummary(), []));
+  const report = useApi(useCallback(() => getBookingReportOverview(), []));
+  const properties = useApi(useCallback(() => listAllProperties(), []));
+
+  const bookings: ApiBookingListItem[] = useMemo(() => feed.data?.results ?? [], [feed.data]);
 
   const tabs = useMemo(
     () =>
@@ -40,28 +48,21 @@ export default function BookingsPage() {
         ...t,
         count: t.id === "all" ? bookings.length : bookings.filter((b) => b.status === t.id).length,
       })),
-    [],
+    [bookings],
   );
 
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase();
     return bookings.filter((booking) => {
       if (tab !== "all" && booking.status !== tab) return false;
-      const who = booking.booker?.fullName ?? booking.manualCustomerName ?? "";
-      if (q && !`${booking.purpose} ${booking.property.title} ${who}`.toLowerCase().includes(q))
+      const who = booking.bookerEmail || "";
+      if (q && !`${booking.purpose} ${booking.propertyTitle} ${who}`.toLowerCase().includes(q))
         return false;
       return true;
     });
-  }, [tab, query]);
+  }, [bookings, tab, query]);
 
-  const paidRevenue = bookings
-    .filter((b) => b.paymentStatus === "paid")
-    .reduce((sum, b) => sum + b.finalAmount, 0);
-  const awaiting = bookings
-    .filter((b) => b.paymentStatus === "awaiting_payment" || b.paymentStatus === "unpaid")
-    .reduce((sum, b) => sum + b.finalAmount, 0);
-
-  const columns: Column<Booking>[] = [
+  const columns: Column<ApiBookingListItem>[] = [
     {
       key: "purpose",
       header: "Booking",
@@ -70,7 +71,7 @@ export default function BookingsPage() {
         <span className="block max-w-56">
           <span className="text-ink block truncate text-[13px] font-medium">{row.purpose}</span>
           <span className="text-ink-subtle block truncate text-xs">
-            {row.unit?.name ?? "Whole property"}
+            {row.unitName ?? "Whole property"}
           </span>
         </span>
       ),
@@ -81,27 +82,22 @@ export default function BookingsPage() {
       hideOnMobile: true,
       cell: (row) => (
         <Link
-          href={`/properties/${row.property.id}`}
+          href={`/properties/${row.propertyId}`}
           className="focus-ring text-ink-muted block max-w-44 truncate text-[13px] hover:underline"
         >
-          {row.property.title}
+          {row.propertyTitle}
         </Link>
       ),
     },
     {
       key: "customer",
       header: "Customer",
-      cell: (row) =>
-        row.isManual ? (
-          <span>
-            <UserCell
-              name={row.manualCustomerName ?? "Walk-in"}
-              meta={row.manualCustomerPhone}
-            />
-          </span>
-        ) : (
-          <UserCell name={row.booker!.fullName} meta={row.booker!.email} />
-        ),
+      cell: (row) => (
+        <UserCell
+          name={row.bookerEmail || "Walk-in customer"}
+          meta={row.isManualBooking ? "manual booking" : undefined}
+        />
+      ),
     },
     {
       key: "when",
@@ -121,11 +117,11 @@ export default function BookingsPage() {
       key: "amount",
       header: "Amount",
       align: "right",
-      sortValue: (row) => row.finalAmount,
+      sortValue: (row) => Number(row.finalAmount ?? 0),
       cell: (row) => (
         <span className="text-ink text-[13px] font-medium tabular-nums">
-          {money(row.finalAmount)}
-          {row.discountAmount ? (
+          {money(row.finalAmount ?? row.confirmationAmountPaid)}
+          {Number(row.discountAmount) > 0 ? (
             <span className="text-ok block text-[11px] font-normal">
               −{money(row.discountAmount)}
             </span>
@@ -145,7 +141,7 @@ export default function BookingsPage() {
       cell: (row) => (
         <span className="flex items-center gap-1.5">
           <StatusBadge status={row.status} />
-          {row.isManual && <Badge tone="neutral">Manual</Badge>}
+          {row.isManualBooking && <Badge tone="neutral">Manual</Badge>}
         </span>
       ),
     },
@@ -169,34 +165,96 @@ export default function BookingsPage() {
       />
 
       <div className="mb-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        <StatCard label="Paid revenue" value={money(paidRevenue)} delta={23.7} hint="all bookings" />
-        <StatCard label="Awaiting payment" value={money(awaiting)} hint={`${bookings.filter((b) => b.paymentStatus !== "paid").length} bookings`} />
-        <StatCard label="Pending approval" value={String(bookings.filter((b) => b.status === "pending").length)} hint="needs a decision" />
-        <StatCard
-          label="Confirmation rate"
-          value={`${Math.round((bookings.filter((b) => b.status === "confirmed").length / bookings.length) * 100)}%`}
-          delta={6.4}
-        />
+        {finance.loading && !finance.data ? (
+          Array.from({ length: 4 }, (_, i) => (
+            <Card key={i}>
+              <CardSkeleton />
+            </Card>
+          ))
+        ) : (
+          <>
+            <StatCard
+              label="Paid revenue"
+              value={money(finance.data?.paidRevenue)}
+              hint="confirmed and settled"
+            />
+            <StatCard
+              label="Pending revenue"
+              value={money(finance.data?.pendingRevenue)}
+              hint="awaiting payment"
+            />
+            <StatCard
+              label="Refunded"
+              value={money(finance.data?.refundedAmount)}
+              hint="returned to bookers"
+            />
+            <StatCard
+              label="Confirmed"
+              value={`${finance.data?.confirmedBookings ?? 0} / ${finance.data?.totalBookings ?? 0}`}
+              hint="of all bookings"
+            />
+          </>
+        )}
       </div>
 
       <div className="mb-4 grid gap-4 lg:grid-cols-3">
         <Card className="lg:col-span-2">
-          <CardHeader title="Booking revenue" description="Monthly confirmed booking income." />
-          <CardBody>
-            <BarChart
-              labels={monthLabels}
-              series={[{ name: "Booking revenue", color: "var(--brand)", values: revenueSeries.bookings }]}
-            />
-          </CardBody>
+          <CardHeader
+            title="Bookings by status"
+            description="Straight from the landlord report endpoint."
+          />
+          {report.error ? (
+            <CardBody>
+              <ErrorState error={report.error} onRetry={report.refetch} resource="the report" />
+            </CardBody>
+          ) : report.loading && !report.data ? (
+            <CardSkeleton />
+          ) : (
+            <CardBody className="space-y-3.5">
+              {Object.entries(report.data?.byStatus ?? {}).map(([status, count], index) => (
+                <div key={status}>
+                  <div className="mb-1 flex items-baseline justify-between text-[13px]">
+                    <span className="text-ink font-medium">{humanize(status)}</span>
+                    <span className="text-ink-muted tabular-nums">{count}</span>
+                  </div>
+                  <Progress
+                    value={count}
+                    max={Math.max(report.data?.totalBookings ?? 1, 1)}
+                    tone={(["brand", "ok", "warn", "bad"] as const)[index % 4]}
+                  />
+                </div>
+              ))}
+              {Object.keys(report.data?.byStatus ?? {}).length === 0 && (
+                <EmptyState
+                  icon={<CalendarCheck className="size-5" />}
+                  title="No bookings yet"
+                  description="Status counts appear once bookings exist."
+                />
+              )}
+            </CardBody>
+          )}
         </Card>
+
         <Card>
-          <CardHeader title="Volume" description="Bookings created per month." />
+          <CardHeader title="Health" description="Rates across every booking." />
           <CardBody>
-            <BarChart
-              labels={monthLabels}
-              height={160}
-              formatValue={(v) => String(v)}
-              series={[{ name: "Bookings", color: "#38bdf8", values: bookingVolumeSeries }]}
+            <DefinitionList
+              items={[
+                { label: "Total bookings", value: report.data?.totalBookings ?? "—" },
+                { label: "Revenue", value: money(report.data?.revenue) },
+                {
+                  label: "Cancellation rate",
+                  value:
+                    report.data != null ? `${(report.data.cancellationRate * 100).toFixed(1)}%` : "—",
+                },
+                {
+                  label: "Avg. time to confirm",
+                  value:
+                    report.data != null
+                      ? `${report.data.averageConfirmationHours.toFixed(1)} hrs`
+                      : "—",
+                },
+              ]}
             />
           </CardBody>
         </Card>
@@ -213,7 +271,7 @@ export default function BookingsPage() {
           />
           <Select aria-label="Property" className="w-auto">
             <option value="all">All bookable properties</option>
-            {properties
+            {(properties.data ?? [])
               .filter((p) => p.listingType === "for_book")
               .map((p) => (
                 <option key={p.id} value={p.id}>
@@ -223,7 +281,13 @@ export default function BookingsPage() {
           </Select>
         </FilterBar>
 
-        {rows.length === 0 ? (
+        {feed.error ? (
+          <CardBody>
+            <ErrorState error={feed.error} onRetry={feed.refetch} resource="bookings" />
+          </CardBody>
+        ) : feed.loading && !feed.data ? (
+          <TableSkeleton rows={6} columns={5} />
+        ) : rows.length === 0 ? (
           <CardBody>
             <EmptyState
               icon={<CalendarCheck className="size-5" />}
@@ -238,117 +302,30 @@ export default function BookingsPage() {
             rowKey={(row) => row.id}
             pageSize={10}
             expandedContent={(booking) => (
-              <div className="grid gap-5 lg:grid-cols-3">
-                <div className="lg:col-span-2">
-                  <DefinitionList
-                    items={[
-                      { label: "Booking ID", value: `#${booking.id}` },
-                      { label: "Guests", value: booking.numGuests ?? "—" },
-                      { label: "Promo code", value: booking.promoCode ?? "—" },
-                      { label: "Discount", value: money(booking.discountAmount ?? 0) },
-                      { label: "Created", value: formatDateTime(booking.createdAt) },
-                      { label: "Source", value: booking.isManual ? "Manual (landlord)" : "Tenant app" },
-                    ]}
-                  />
-                </div>
-                <div className="flex flex-col gap-2">
-                  {booking.status === "pending" && (
-                    <>
-                      <Button variant="primary">
-                        <CheckCircle2 className="size-4" /> Confirm booking
-                      </Button>
-                      <Button variant="danger">
-                        <XCircle className="size-4" /> Reject
-                      </Button>
-                    </>
-                  )}
-                  {booking.status === "confirmed" && (
-                    <>
-                      <Button>
-                        <CircleDollarSign className="size-4" /> Record offline payment
-                      </Button>
-                      <Button>
-                        <Undo2 className="size-4" /> Issue refund
-                      </Button>
-                      <Button variant="danger">
-                        <Ban className="size-4" /> Cancel booking
-                      </Button>
-                    </>
-                  )}
-                </div>
-              </div>
+              <BookingActions booking={booking} onChanged={feed.refetch} />
             )}
           />
         )}
       </Card>
 
-      <div className="mt-4 grid gap-4 lg:grid-cols-2">
-        <Card>
-          <CardHeader
-            title="Availability blocks"
-            description="Dates held back from booking."
-            action={<Button size="sm">Add block</Button>}
+      <Card className="mt-4">
+        <CardHeader
+          title="Availability blocks & discounts"
+          description="Both are configured per property."
+        />
+        <CardBody>
+          <EmptyState
+            icon={<Tag className="size-5" />}
+            title="Managed on each property"
+            description="The API exposes blocks and discounts only under /properties/{id}/, with no platform-wide list. Open a bookable property to see and edit them."
+            action={
+              <Link href="/properties">
+                <Button>Go to properties</Button>
+              </Link>
+            }
           />
-          {availabilityBlocks.length === 0 ? (
-            <CardBody>
-              <EmptyState icon={<Ban className="size-5" />} title="No blocks set" />
-            </CardBody>
-          ) : (
-            <ul>
-              {availabilityBlocks.map((block) => (
-                <li
-                  key={block.id}
-                  className="border-line flex items-start gap-3 border-b px-5 py-3.5 last:border-0"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="text-ink truncate text-[13px] font-medium">
-                      {block.unit?.name ?? block.property.title}
-                    </p>
-                    <p className="text-ink-subtle truncate text-xs">
-                      {formatDate(block.startDatetime)} → {formatDate(block.endDatetime)}
-                      {block.note && ` · ${block.note}`}
-                    </p>
-                  </div>
-                  <Badge tone="warn">{humanize(block.reason)}</Badge>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
-
-        <Card>
-          <CardHeader
-            title="Discounts & promo codes"
-            description="Percent or fixed reductions applied at quote time."
-            action={<Button size="sm">Add discount</Button>}
-          />
-          <ul>
-            {bookingDiscounts.map((discount) => (
-              <li
-                key={discount.id}
-                className="border-line flex items-start gap-3 border-b px-5 py-3.5 last:border-0"
-              >
-                <span className="bg-surface-hover text-ink-subtle grid size-8 shrink-0 place-items-center rounded-lg">
-                  <Tag className="size-4" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-ink truncate text-[13px] font-medium">{discount.name}</p>
-                  <p className="text-ink-subtle truncate text-xs">
-                    {discount.discountType === "percent"
-                      ? `${discount.value}% off`
-                      : `${money(discount.value)} off`}
-                    {discount.promoCode && ` · code ${discount.promoCode}`} ·{" "}
-                    {humanize(discount.scope)} scope
-                  </p>
-                </div>
-                <Badge tone={discount.isActive ? "ok" : "neutral"}>
-                  {discount.isActive ? "Active" : "Inactive"}
-                </Badge>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      </div>
+        </CardBody>
+      </Card>
 
       <ManualBookingModal open={manualOpen} onClose={() => setManualOpen(false)} />
     </>
@@ -356,8 +333,17 @@ export default function BookingsPage() {
 }
 
 function ManualBookingModal({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const [propertyId, setPropertyId] = useState("105");
-  const units = propertyUnits[Number(propertyId)] ?? [];
+  const properties = useApi(useCallback(() => listAllProperties(), []));
+  const bookable = useMemo(
+    () => (properties.data ?? []).filter((p) => p.listingType === "for_book"),
+    [properties.data],
+  );
+  const [propertyId, setPropertyId] = useState("");
+  const selectedId = Number(propertyId) || bookable[0]?.id;
+  const unitList = useApi(
+    useCallback(() => (selectedId ? listUnits(selectedId) : Promise.resolve([])), [selectedId]),
+  );
+  const units = unitList.data ?? [];
 
   return (
     <Modal
@@ -378,13 +364,11 @@ function ManualBookingModal({ open, onClose }: { open: boolean; onClose: () => v
         <div className="grid gap-4 sm:grid-cols-2">
           <Field label="Property">
             <Select value={propertyId} onChange={(e) => setPropertyId(e.target.value)}>
-              {properties
-                .filter((p) => p.listingType === "for_book")
-                .map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.title}
-                  </option>
-                ))}
+              {bookable.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.title}
+                </option>
+              ))}
             </Select>
           </Field>
           <Field label="Unit">
@@ -431,5 +415,80 @@ function ManualBookingModal({ open, onClose }: { open: boolean; onClose: () => v
         </Field>
       </div>
     </Modal>
+  );
+}
+
+function BookingActions({
+  booking,
+  onChanged,
+}: {
+  booking: ApiBookingListItem;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  async function run(action: () => Promise<unknown>) {
+    setBusy(true);
+    try {
+      await action();
+      onChanged();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-5 lg:grid-cols-3">
+      <div className="lg:col-span-2">
+        <DefinitionList
+          items={[
+            { label: "Booking ID", value: `#${booking.id}` },
+            { label: "Guests", value: booking.numGuests ?? "—" },
+            { label: "Promo code", value: booking.promoCode || "—" },
+            { label: "Discount", value: money(booking.discountAmount) },
+            { label: "Confirmation paid", value: money(booking.confirmationAmountPaid) },
+            { label: "Created", value: formatDateTime(booking.createdAt) },
+            { label: "Booker", value: booking.bookerEmail || "Walk-in" },
+            {
+              label: "Source",
+              value: booking.isManualBooking ? "Manual (landlord)" : "Tenant app",
+            },
+          ]}
+        />
+      </div>
+      <div className="flex flex-col gap-2">
+        {booking.status === "pending" && (
+          <>
+            <Button variant="primary" disabled={busy} onClick={() => run(() => confirmBooking(booking.id))}>
+              <CheckCircle2 className="size-4" /> Confirm booking
+            </Button>
+            <Button
+              variant="danger"
+              disabled={busy}
+              onClick={() => run(() => rejectBooking(booking.id, "Rejected from the admin console."))}
+            >
+              <XCircle className="size-4" /> Reject
+            </Button>
+          </>
+        )}
+        {booking.status === "confirmed" && (
+          <>
+            <Button disabled={busy}>
+              <CircleDollarSign className="size-4" /> Record offline payment
+            </Button>
+            <Button disabled={busy}>
+              <Undo2 className="size-4" /> Issue refund
+            </Button>
+            <Button
+              variant="danger"
+              disabled={busy}
+              onClick={() => run(() => cancelBooking(booking.id, "Cancelled from the admin console."))}
+            >
+              <Ban className="size-4" /> Cancel booking
+            </Button>
+          </>
+        )}
+      </div>
+    </div>
   );
 }

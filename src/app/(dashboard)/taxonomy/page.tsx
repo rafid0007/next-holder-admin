@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { ChevronRight, GripVertical, Plus, Sparkles, Tags, Trash2 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -10,19 +10,30 @@ import { Modal } from "@/components/ui/modal";
 import { Tabs } from "@/components/ui/tabs";
 import { DataTable } from "@/components/ui/table";
 import { EmptyState, PageHeader } from "@/components/ui/misc";
-import { amenities, categories, properties } from "@/lib/mock/data";
+import { useApi } from "@/lib/api/hooks";
+import { listAllProperties, listAmenities, listCategories } from "@/lib/api/resources";
+import { ErrorState, TableSkeleton } from "@/components/ui/states";
 import { cn, number } from "@/lib/utils";
 
 export default function TaxonomyPage() {
   const [tab, setTab] = useState("categories");
-  const [activeCategory, setActiveCategory] = useState(categories[0].id);
+  const [activeCategory, setActiveCategory] = useState<number | null>(null);
   const [createOpen, setCreateOpen] = useState<"category" | "type" | "amenity" | null>(null);
 
-  const selected = categories.find((c) => c.id === activeCategory)!;
-  const types = selected.types ?? [];
+  const catalog = useApi(useCallback(() => listCategories(), []));
+  const amenityList = useApi(useCallback(() => listAmenities(), []));
+  // Usage counts come from the signed-in landlord's own portfolio — the API has
+  // no platform-wide count per type.
+  const portfolio = useApi(useCallback(() => listAllProperties(), []));
+
+  const categories = useMemo(() => catalog.data ?? [], [catalog.data]);
+  const amenities = useMemo(() => amenityList.data ?? [], [amenityList.data]);
+
+  const selected = categories.find((c) => c.id === activeCategory) ?? categories[0];
+  const types = selected?.types ?? [];
 
   const typeUsage = (typeId: number) =>
-    properties.filter((p) => p.propertyType.id === typeId).length;
+    (portfolio.data ?? []).filter((p) => p.propertyType.id === typeId).length;
 
   return (
     <>
@@ -53,7 +64,20 @@ export default function TaxonomyPage() {
           className="px-3"
         />
 
-        {tab === "categories" ? (
+        {catalog.error || amenityList.error ? (
+          <CardBody>
+            <ErrorState
+              error={(catalog.error ?? amenityList.error)!}
+              onRetry={() => {
+                catalog.refetch();
+                amenityList.refetch();
+              }}
+              resource="the taxonomy"
+            />
+          </CardBody>
+        ) : (catalog.loading && !catalog.data) || (amenityList.loading && !amenityList.data) ? (
+          <TableSkeleton rows={6} columns={4} />
+        ) : tab === "categories" ? (
           <div className="grid lg:grid-cols-[18rem_1fr]">
             <ul className="border-line lg:border-r">
               {categories.map((category) => (
@@ -86,12 +110,12 @@ export default function TaxonomyPage() {
 
             <div>
               <CardHeader
-                title={selected.name}
-                description={selected.description}
+                title={selected?.name ?? "No categories"}
+                description={selected?.description}
                 action={
                   <>
-                    <Badge tone={selected.isActive ? "ok" : "neutral"}>
-                      {selected.isActive ? "Active" : "Hidden"}
+                    <Badge tone={selected?.isActive ? "ok" : "neutral"}>
+                      {selected?.isActive ? "Active" : "Hidden"}
                     </Badge>
                     <Button size="sm" onClick={() => setCreateOpen("type")}>
                       <Plus className="size-3.5" /> Add type
@@ -232,11 +256,13 @@ export default function TaxonomyPage() {
               },
               {
                 key: "usage",
-                header: "Used by",
+                header: "In portfolio",
                 align: "right",
                 cell: (row) => (
                   <span className="text-ink-muted text-[13px] tabular-nums">
-                    {properties.filter((p) => p.amenities?.some((a) => a.id === row.id)).length}
+                    {(portfolio.data ?? []).filter((p) =>
+                      p.amenities.some((a) => a.id === row.id),
+                    ).length}
                   </span>
                 ),
               },
@@ -288,7 +314,7 @@ export default function TaxonomyPage() {
         <div className="space-y-5">
           {createOpen === "type" && (
             <Field label="Parent category">
-              <Select defaultValue={String(activeCategory)}>
+              <Select defaultValue={String(activeCategory ?? categories[0]?.id ?? "")}>
                 {categories.map((category) => (
                   <option key={category.id} value={category.id}>
                     {category.name}

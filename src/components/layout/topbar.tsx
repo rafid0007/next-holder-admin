@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import {
@@ -18,7 +18,8 @@ import {
 import { navItems } from "./nav";
 import { useTheme } from "./theme-provider";
 import { tokenStore } from "@/lib/api/client";
-import { notifications as seedNotifications } from "@/lib/mock/data";
+import { useApi } from "@/lib/api/hooks";
+import { listNotifications, markAllNotificationsRead } from "@/lib/api/resources";
 import { Avatar } from "@/components/ui/misc";
 import { Button } from "@/components/ui/button";
 import { cn, relativeTime } from "@/lib/utils";
@@ -55,9 +56,11 @@ export function Topbar({
   const router = useRouter();
   const { theme, toggle } = useTheme();
   const [panel, setPanel] = useState<"none" | "bell" | "user">("none");
-  const [items, setItems] = useState(seedNotifications);
   const ref = useDismiss(() => setPanel("none"));
 
+  // Quietly ignores failures: a signed-out console should still navigate.
+  const feed = useApi(useCallback(() => listNotifications().catch(() => null), []));
+  const items = feed.data?.results ?? [];
   const unread = items.filter((n) => !n.isRead).length;
   const current =
     navItems.find((item) => item.href !== "/" && pathname.startsWith(item.href)) ??
@@ -136,16 +139,25 @@ export function Topbar({
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => setItems((prev) => prev.map((n) => ({ ...n, isRead: true })))}
+                  disabled={unread === 0}
+                  onClick={async () => {
+                    await markAllNotificationsRead();
+                    feed.refetch();
+                  }}
                 >
                   <Check className="size-3.5" /> Mark all read
                 </Button>
               </div>
               <ul className="max-h-80 overflow-y-auto">
+                {items.length === 0 && (
+                  <li className="text-ink-subtle px-4 py-8 text-center text-[13px]">
+                    Nothing to show.
+                  </li>
+                )}
                 {items.slice(0, 6).map((item) => (
                   <li key={item.id}>
                     <Link
-                      href={item.targetUrl ?? "/notifications"}
+                      href={(item.targetUrl || "/notifications") as "/"}
                       onClick={() => setPanel("none")}
                       className={cn(
                         "hover:bg-surface-hover border-line flex gap-3 border-b px-4 py-3 last:border-0",
