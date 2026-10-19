@@ -157,3 +157,110 @@ export const endpoints = {
     reverseAdmin: "/geo/reverse-admin/",
   },
 } as const;
+
+/**
+ * The staff API. Everything the console does as an admin lives under
+ * `/admin/`; the endpoints above remain for the handful of screens with no
+ * admin equivalent yet (maintenance, inquiries, marketplace, notifications)
+ * and for public dropdown reads.
+ */
+export const admin = {
+  me: "/admin/me",
+  permissions: "/admin/permissions",
+
+  roles: "/admin/roles",
+  role: (id: number) => `/admin/roles/${id}`,
+  staff: "/admin/staff",
+  staffRoles: (userId: number) => `/admin/staff/${userId}/roles`,
+
+  auditLogs: "/admin/audit-logs",
+  auditLog: (id: number) => `/admin/audit-logs/${id}`,
+  userAuditLogs: (id: number) => `/admin/users/${id}/audit-logs`,
+
+  users: "/admin/users",
+  user: (id: number) => `/admin/users/${id}`,
+  userActivity: (id: number) => `/admin/users/${id}/activity`,
+  suspendUser: (id: number) => `/admin/users/${id}/suspend`,
+  reactivateUser: (id: number) => `/admin/users/${id}/reactivate`,
+  verifyUser: (id: number) => `/admin/users/${id}/verify`,
+  unverifyUser: (id: number) => `/admin/users/${id}/unverify`,
+  userRoles: (id: number) => `/admin/users/${id}/roles`,
+  userSubscription: (id: number) => `/admin/users/${id}/subscription`,
+  userSpSubscription: (id: number) => `/admin/users/${id}/sp-subscription`,
+
+  subscriptionPlans: "/admin/subscription-plans",
+  subscriptionPlan: (id: number) => `/admin/subscription-plans/${id}`,
+  subscriptions: "/admin/subscriptions",
+  subscriptionStats: "/admin/subscriptions/stats",
+  spSubscriptionPlans: "/admin/sp-subscription-plans",
+  spSubscriptionPlan: (id: number) => `/admin/sp-subscription-plans/${id}`,
+  spSubscriptions: "/admin/sp-subscriptions",
+
+  creditPackages: "/admin/credit-packages",
+  creditPackage: (id: number) => `/admin/credit-packages/${id}`,
+  creditWallets: "/admin/credit-wallets",
+  creditWallet: (userId: number) => `/admin/credit-wallets/${userId}`,
+  creditTransactions: "/admin/credit-transactions",
+  grantCredits: "/admin/credits/grant",
+  refundCredits: "/admin/credits/refund",
+  deductCredits: "/admin/credits/deduct",
+
+  properties: "/admin/properties",
+  property: (id: number) => `/admin/properties/${id}`,
+  hideProperty: (id: number) => `/admin/properties/${id}/hide`,
+  unhideProperty: (id: number) => `/admin/properties/${id}/unhide`,
+
+  providerApplications: "/admin/provider-applications",
+  providerApplication: (id: number) => `/admin/provider-applications/${id}`,
+  approveProvider: (id: number) => `/admin/provider-applications/${id}/approve`,
+  rejectProvider: (id: number) => `/admin/provider-applications/${id}/reject`,
+  suspendProvider: (id: number) => `/admin/provider-applications/${id}/suspend`,
+  reinstateProvider: (id: number) => `/admin/provider-applications/${id}/reinstate`,
+
+  provisionalReports: "/admin/provisional-reports",
+  provisionalReport: (id: number) => `/admin/provisional-reports/${id}`,
+  resolveProvisionalReport: (id: number) => `/admin/provisional-reports/${id}/resolve`,
+  complaints: "/admin/complaints",
+  complaint: (id: number) => `/admin/complaints/${id}`,
+
+  dashboardStats: "/admin/dashboard/stats",
+  financeSummary: "/admin/finance/summary",
+  reportOverview: "/admin/reports/overview",
+  bookingsOverview: "/admin/reports/bookings-overview",
+  timeseries: "/admin/reports/timeseries",
+
+  bookings: "/admin/bookings",
+  booking: (id: number) => `/admin/bookings/${id}`,
+  leases: "/admin/leases",
+  lease: (id: number) => `/admin/leases/${id}`,
+  payments: "/admin/payments",
+  rentBills: "/admin/rent-bills",
+  rentBill: (id: number) => `/admin/rent-bills/${id}`,
+  bookingDiscounts: "/admin/booking-discounts",
+  bookingDiscount: (id: number) => `/admin/booking-discounts/${id}`,
+
+  propertyCategories: "/admin/property-categories",
+  propertyCategory: (id: number) => `/admin/property-categories/${id}`,
+  categoryTypes: (categoryId: number) => `/admin/property-categories/${categoryId}/types`,
+  propertyType: (id: number) => `/admin/property-types/${id}`,
+  amenities: "/admin/amenities",
+  amenity: (id: number) => `/admin/amenities/${id}`,
+
+  spCategories: "/admin/sp-categories",
+  spCategory: (id: number) => `/admin/sp-categories/${id}`,
+  spCategoryTypes: (id: number) => `/admin/sp-categories/${id}/types`,
+  spType: (id: number) => `/admin/sp-types/${id}`,
+  spAreas: "/admin/sp-areas",
+  spArea: (id: number) => `/admin/sp-areas/${id}`,
+
+  geo: {
+    divisions: "/admin/geo/divisions",
+    division: (id: number) => `/admin/geo/divisions/${id}`,
+    districts: "/admin/geo/districts",
+    district: (id: number) => `/admin/geo/districts/${id}`,
+    thanas: "/admin/geo/thanas",
+    thana: (id: number) => `/admin/geo/thanas/${id}`,
+    areas: "/admin/geo/areas",
+    area: (id: number) => `/admin/geo/areas/${id}`,
+  },
+} as const;

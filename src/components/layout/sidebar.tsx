@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { Building2, PanelLeftClose, PanelLeftOpen, X } from "lucide-react";
 import { navSections } from "./nav";
+import { useAdminSession } from "@/lib/api/admin-session";
 import { useWorkQueue, type WorkQueue } from "@/lib/api/work-queue";
 import { cn } from "@/lib/utils";
 
@@ -21,10 +22,21 @@ export function SidebarContent({
   counts: WorkQueue;
 }) {
   const pathname = usePathname();
+  const { canAny } = useAdminSession();
+
+  // A section disappears once every item in it is hidden.
+  const sections = navSections
+    .map((section) => ({
+      ...section,
+      items: section.items.filter(
+        (item) => !item.permissions || canAny(...item.permissions),
+      ),
+    }))
+    .filter((section) => section.items.length > 0);
 
   return (
     <nav className="flex-1 overflow-y-auto px-3 py-3" aria-label="Main">
-      {navSections.map((section) => (
+      {sections.map((section) => (
         <div key={section.title} className="mb-5 last:mb-0">
           {!collapsed && (
             <p className="text-ink-subtle mb-1.5 px-2 text-[11px] font-semibold tracking-wider uppercase">

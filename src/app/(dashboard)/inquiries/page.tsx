@@ -77,6 +77,14 @@ export default function InquiriesPage() {
         description="Questions sent about marketplace listings, from both registered users and guests."
       />
 
+      <div className="bg-warn-soft border-warn/25 mb-4 rounded-xl border p-3.5">
+        <p className="text-warn text-[13px] leading-5">
+          This screen reads the landlord-scoped endpoint, so it shows only records tied to your own
+          account. The admin API has no platform-wide equivalent yet — see API-GAPS.md in the
+          backend.
+        </p>
+      </div>
+
       <div className="mb-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
           label="Open inquiries"

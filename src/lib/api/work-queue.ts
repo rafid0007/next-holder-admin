@@ -2,33 +2,60 @@
 
 import { useCallback } from "react";
 import { useApi } from "./hooks";
-import { listBills, listBookings, listInquiries, listLeases, listMaintenance, listNotifications } from "./resources";
+import { listAdminBookings, listAdminRentBills, getDashboardStats } from "./admin";
+import { listNotifications } from "./resources";
+import { useAdminSession } from "./admin-session";
 import type { BadgeKey } from "@/components/layout/nav";
 
 export type WorkQueue = Partial<Record<BadgeKey, number>>;
 
 /**
- * Counts for the sidebar's pending-work pills. The sidebar is mounted once by
- * the dashboard layout, so this runs per session rather than per navigation.
- * Every request is allowed to fail quietly — a 403 on one resource should not
- * blank the whole navigation.
+ * Counts for the sidebar's pending-work pills. Mounted once by the dashboard
+ * layout, so this runs per session rather than per navigation. Each request is
+ * allowed to fail quietly — a missing permission should not blank the nav.
  */
 export function useWorkQueue(): WorkQueue {
+  const { can } = useAdminSession();
   const quiet = <T,>(promise: Promise<T>) => promise.catch(() => null);
 
-  const leases = useApi(useCallback(() => quiet(listLeases()), []));
-  const bookings = useApi(useCallback(() => quiet(listBookings({ status: "pending" })), []));
-  const bills = useApi(useCallback(() => quiet(listBills({ status: "pending_verification" })), []));
-  const maintenance = useApi(useCallback(() => quiet(listMaintenance({ status: "pending" })), []));
-  const inquiries = useApi(useCallback(() => quiet(listInquiries({ status: "open" })), []));
-  const notifications = useApi(useCallback(() => quiet(listNotifications({ status: "unread" })), []));
+  const stats = useApi(
+    useCallback(
+      () => (can("dashboard.view") ? quiet(getDashboardStats()) : Promise.resolve(null)),
+      [can],
+    ),
+  );
+  const bookings = useApi(
+    useCallback(
+      () =>
+        can("operations.view")
+          ? quiet(listAdminBookings({ status: "pending", page_size: 1 }))
+          : Promise.resolve(null),
+      [can],
+    ),
+  );
+  const bills = useApi(
+    useCallback(
+      () =>
+        can("operations.view")
+          ? quiet(listAdminRentBills({ status: "pending_verification", page_size: 1 }))
+          : Promise.resolve(null),
+      [can],
+    ),
+  );
+  const notifications = useApi(
+    useCallback(() => quiet(listNotifications({ status: "unread" })), []),
+  );
+
+  const moderation = stats.data?.moderation;
 
   return {
-    pendingLeases: (leases.data?.results ?? []).filter((l) => l.status === "pending").length,
-    pendingBookings: bookings.data?.count,
+    pendingBookings: bookings.data?.count ?? stats.data?.bookings.pending,
     billsToVerify: bills.data?.count,
-    openMaintenance: maintenance.data?.count,
-    openInquiries: inquiries.data?.count,
+    providerApplications: moderation?.pendingProviderApplications,
+    openModeration:
+      moderation != null
+        ? moderation.openProvisionalReports + moderation.openComplaints
+        : undefined,
     unreadNotifications: notifications.data?.count,
   };
 }

@@ -1,87 +1,87 @@
 "use client";
 
 import { useCallback, useMemo, useState } from "react";
-import {
-  Banknote, CalendarClock, CheckCircle2, FileText, Plus, Receipt, RefreshCcw, XCircle,
-} from "lucide-react";
+import Link from "next/link";
+import { Banknote, FileText, Receipt } from "lucide-react";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Badge, StatusBadge } from "@/components/ui/badge";
+import { SearchInput, Select } from "@/components/ui/field";
+import { Drawer } from "@/components/ui/modal";
 import { Button } from "@/components/ui/button";
-import { Field, Input, SearchInput, Select, Textarea } from "@/components/ui/field";
-import { Drawer, Modal } from "@/components/ui/modal";
 import { DataTable, type Column } from "@/components/ui/table";
 import { Tabs } from "@/components/ui/tabs";
 import {
   DefinitionList, EmptyState, FilterBar, PageHeader, Progress, StatCard, UserCell,
 } from "@/components/ui/misc";
-import { Donut } from "@/components/charts/donut";
 import { CardSkeleton, ErrorState, TableSkeleton } from "@/components/ui/states";
+import { Donut } from "@/components/charts/donut";
+import { RequirePermission } from "@/components/layout/permission-gate";
 import { useApi } from "@/lib/api/hooks";
-import {
-  cancelBillSchedule, listBillSchedules, listBills, listLeases, verifyBillPayment,
-} from "@/lib/api/resources";
-import type { ApiRentBill } from "@/lib/api/types";
-import { formatDate, formatDateTime, humanize, money } from "@/lib/utils";
+import { useAdminSession } from "@/lib/api/admin-session";
+import { getAdminReportOverview, listAdminRentBills } from "@/lib/api/admin";
+import type { AdminRentBill } from "@/lib/api/admin-types";
+import { formatDate, formatDateTime, humanize, money, number } from "@/lib/utils";
+
+const tabs = [
+  { id: "all", label: "All" },
+  { id: "pending_verification", label: "To verify" },
+  { id: "unpaid", label: "Unpaid" },
+  { id: "overdue", label: "Overdue" },
+  { id: "paid", label: "Paid" },
+];
 
 export default function RentPage() {
-  const [tab, setTab] = useState("pending_verification");
-  const [query, setQuery] = useState("");
+  return (
+    <RequirePermission codes={["operations.view"]}>
+      <Rent />
+    </RequirePermission>
+  );
+}
+
+function Rent() {
+  const { can } = useAdminSession();
+  const [tab, setTab] = useState("all");
   const [billType, setBillType] = useState("all");
-  const [reviewing, setReviewing] = useState<ApiRentBill | null>(null);
-  const [createOpen, setCreateOpen] = useState(false);
-  const [verifyNote, setVerifyNote] = useState("");
+  const [search, setSearch] = useState("");
+  const [open, setOpen] = useState<AdminRentBill | null>(null);
 
   const feed = useApi(
-    useCallback(async () => ({ page: await listBills(), fetchedAt: Date.now() }), []),
+    useCallback(
+      () =>
+        listAdminRentBills({
+          status: tab === "all" ? undefined : tab,
+          billType: billType === "all" ? undefined : billType,
+        }),
+      [tab, billType],
+    ),
   );
-  const schedules = useApi(useCallback(() => listBillSchedules(), []));
-  const leaseFeed = useApi(useCallback(() => listLeases(), []));
-
-  const rentBills: ApiRentBill[] = useMemo(() => feed.data?.page.results ?? [], [feed.data]);
-  const billSchedules = useMemo(() => schedules.data?.results ?? [], [schedules.data]);
-  const leases = useMemo(() => leaseFeed.data?.results ?? [], [leaseFeed.data]);
-
-  const tabs = useMemo(
-    () =>
-      [
-        { id: "pending_verification", label: "To verify" },
-        { id: "unpaid", label: "Unpaid" },
-        { id: "overdue", label: "Overdue" },
-        { id: "paid", label: "Paid" },
-        { id: "all", label: "All" },
-      ].map((t) => ({
-        ...t,
-        count: t.id === "all" ? rentBills.length : rentBills.filter((b) => b.status === t.id).length,
-      })),
-    [rentBills],
+  const overview = useApi(
+    useCallback(
+      () => (can("analytics.view") ? getAdminReportOverview() : Promise.resolve(null)),
+      [can],
+    ),
   );
 
+  const all = useMemo(() => feed.data?.results ?? [], [feed.data]);
   const rows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return rentBills.filter((bill) => {
-      if (tab !== "all" && bill.status !== tab) return false;
-      if (billType !== "all" && bill.billType !== billType) return false;
-      if (q && !`${bill.title} ${bill.propertyTitle} ${bill.tenant.fullName}`.toLowerCase().includes(q))
-        return false;
-      return true;
-    });
-  }, [rentBills, tab, query, billType]);
+    const q = search.trim().toLowerCase();
+    if (!q) return all;
+    return all.filter((bill) =>
+      `${bill.title} ${bill.propertyTitle} ${bill.tenant.fullName}`.toLowerCase().includes(q),
+    );
+  }, [all, search]);
 
-  const totals = (statuses: ApiRentBill["status"][]) =>
-    rentBills
-      .filter((b) => statuses.includes(b.status))
-      .reduce((sum, b) => sum + Number(b.amount), 0);
+  const sum = (status: string) =>
+    all.filter((b) => b.status === status).reduce((acc, b) => acc + Number(b.amount), 0);
+  const collected = sum("paid");
+  const pending = sum("pending_verification");
+  const unpaid = sum("unpaid");
+  const overdue = sum("overdue");
 
-  const collected = totals(["paid"]);
-  const overdue = totals(["overdue"]);
-  const pending = totals(["pending_verification"]);
-  const unpaid = totals(["unpaid"]);
-
-  const columns: Column<ApiRentBill>[] = [
+  const columns: Column<AdminRentBill>[] = [
     {
       key: "title",
       header: "Bill",
-      sortValue: (row) => row.title,
       cell: (row) => (
         <span className="block max-w-56">
           <span className="text-ink block truncate text-[13px] font-medium">{row.title}</span>
@@ -96,38 +96,25 @@ export default function RentPage() {
       header: "Property",
       hideOnMobile: true,
       cell: (row) => (
-        <span className="text-ink-muted block max-w-44 truncate text-[13px]">
+        <Link
+          href={`/properties/${row.propertyId}`}
+          className="focus-ring text-ink-muted block max-w-40 truncate text-[13px] hover:underline"
+        >
           {row.propertyTitle}
-        </span>
+        </Link>
       ),
     },
-    {
-      key: "tenant",
-      header: "Tenant",
-      sortValue: (row) => row.tenant.fullName,
-      cell: (row) => <UserCell name={row.tenant.fullName} />,
-    },
+    { key: "tenant", header: "Tenant", cell: (row) => <UserCell name={row.tenant.fullName} /> },
     {
       key: "due",
-      header: "Due date",
+      header: "Due",
       hideOnMobile: true,
-      sortValue: (row) => row.dueDate,
-      cell: (row) => {
-        const late =
-          new Date(row.dueDate).getTime() < (feed.data?.fetchedAt ?? 0) &&
-          !["paid", "cancelled"].includes(row.status);
-        return (
-          <span className={late ? "text-bad text-xs font-medium" : "text-ink-muted text-xs"}>
-            {formatDate(row.dueDate)}
-          </span>
-        );
-      },
+      cell: (row) => <span className="text-ink-muted text-xs">{formatDate(row.dueDate)}</span>,
     },
     {
       key: "amount",
       header: "Amount",
       align: "right",
-      sortValue: (row) => Number(row.amount),
       cell: (row) => (
         <span className="text-ink text-[13px] font-medium tabular-nums">{money(row.amount)}</span>
       ),
@@ -143,29 +130,16 @@ export default function RentPage() {
           <span className="text-ink-subtle text-xs">—</span>
         ),
     },
-    {
-      key: "status",
-      header: "Status",
-      sortValue: (row) => row.status,
-      cell: (row) => <StatusBadge status={row.status} />,
-    },
+    { key: "status", header: "Status", cell: (row) => <StatusBadge status={row.status} /> },
     {
       key: "actions",
       header: "",
       align: "right",
-      cell: (row) =>
-        row.status === "pending_verification" ? (
-          <Button
-            size="sm"
-            variant="subtle"
-            onClick={(event) => {
-              event.stopPropagation();
-              setReviewing(row);
-            }}
-          >
-            Review
-          </Button>
-        ) : null,
+      cell: (row) => (
+        <Button size="sm" variant="ghost" onClick={() => setOpen(row)}>
+          View
+        </Button>
+      ),
     },
   ];
 
@@ -173,39 +147,29 @@ export default function RentPage() {
     <>
       <PageHeader
         title="Rent & bills"
-        description="Bills raised against leases, payment proofs submitted by tenants, and recurring schedules."
-        actions={
-          <>
-            <Button>
-              <Receipt className="size-4" /> Export ledger
-            </Button>
-            <Button variant="primary" onClick={() => setCreateOpen(true)}>
-              <Plus className="size-4" /> Raise a bill
-            </Button>
-          </>
-        }
+        description="Every bill raised against a lease. Read-only — landlords verify payment proofs."
       />
 
       <div className="mb-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {feed.loading && !feed.data ? (
-          Array.from({ length: 4 }, (_, i) => (
-            <Card key={i}>
-              <CardSkeleton />
-            </Card>
-          ))
-        ) : (
-          <>
-        <StatCard label="Collected" value={money(collected)} icon={<Banknote className="size-4" />} />
-        <StatCard label="Awaiting verification" value={money(pending)} hint={`${rentBills.filter((b) => b.status === "pending_verification").length} proofs`} />
-        <StatCard label="Unpaid" value={money(unpaid)} hint="not yet due" />
-        <StatCard label="Overdue" value={money(overdue)} hint="chase these" />
-          </>
-        )}
+        <StatCard label="Collected" value={money(collected)} icon={<Banknote className="size-4" />} hint="on this page" />
+        <StatCard label="Awaiting verification" value={money(pending)} />
+        <StatCard label="Unpaid" value={money(unpaid)} />
+        <StatCard
+          label="Overdue"
+          value={money(overdue)}
+          hint={`${number(overview.data?.unpaidBills ?? 0)} unpaid platform-wide`}
+        />
       </div>
 
-      <div className="mb-4 grid gap-4 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader title="Collection health" description="Share of billed value by state." />
+      <Card className="mb-4">
+        <CardHeader title="Collection health" description="Share of billed value on this page." />
+        {feed.loading && !feed.data ? (
+          <CardSkeleton />
+        ) : collected + pending + unpaid + overdue === 0 ? (
+          <CardBody>
+            <EmptyState icon={<Receipt className="size-5" />} title="Nothing billed yet" />
+          </CardBody>
+        ) : (
           <CardBody>
             <Donut
               total={collected + pending + unpaid + overdue}
@@ -220,52 +184,23 @@ export default function RentPage() {
             <div className="border-line mt-5 border-t pt-4">
               <Progress
                 value={collected}
-                max={collected + pending + unpaid + overdue}
+                max={Math.max(collected + pending + unpaid + overdue, 1)}
                 tone="ok"
                 label="Collection rate"
               />
             </div>
           </CardBody>
-        </Card>
-
-        <Card>
-          <CardHeader title="Lease coverage" description="Active leases with a recurring schedule." />
-          <CardBody className="space-y-4">
-            <div className="grid grid-cols-2 gap-3">
-              <div className="bg-surface-muted rounded-xl p-3">
-                <p className="text-ink-subtle text-xs">Active leases</p>
-                <p className="text-ink mt-1 text-xl font-semibold tabular-nums">
-                  {leases.filter((l) => l.status === "active").length}
-                </p>
-              </div>
-              <div className="bg-surface-muted rounded-xl p-3">
-                <p className="text-ink-subtle text-xs">Active schedules</p>
-                <p className="text-ink mt-1 text-xl font-semibold tabular-nums">
-                  {billSchedules.filter((s) => s.isActive).length}
-                </p>
-              </div>
-            </div>
-            <Progress
-              value={billSchedules.filter((s) => s.isActive).length}
-              max={leases.filter((l) => l.status === "active").length}
-              tone="brand"
-              label="Leases on autopilot"
-            />
-            <p className="text-ink-muted text-[13px] leading-5">
-              Leases without a schedule need bills raised by hand each cycle.
-            </p>
-          </CardBody>
-        </Card>
-      </div>
+        )}
+      </Card>
 
       <Card>
         <Tabs items={tabs} value={tab} onChange={setTab} className="px-3" />
         <FilterBar>
           <SearchInput
             placeholder="Search bill, property or tenant…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            className="w-full sm:w-80"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="w-full sm:w-72"
           />
           <Select
             aria-label="Bill type"
@@ -290,266 +225,73 @@ export default function RentPage() {
           <TableSkeleton rows={6} columns={6} />
         ) : rows.length === 0 ? (
           <CardBody>
-            <EmptyState
-              icon={<FileText className="size-5" />}
-              title="No bills in this state"
-              description="Nothing matches the current tab and filters."
-            />
+            <EmptyState icon={<FileText className="size-5" />} title="No bills match" />
           </CardBody>
         ) : (
-          <DataTable columns={columns} rows={rows} rowKey={(row) => row.id} pageSize={10} />
-        )}
-      </Card>
-
-      <Card className="mt-4">
-        <CardHeader
-          title="Recurring schedules"
-          description="Bills generated automatically on each cycle."
-          action={<Button size="sm">New schedule</Button>}
-        />
-        {schedules.loading && !schedules.data ? (
-          <TableSkeleton rows={4} columns={5} />
-        ) : (
-        <DataTable
-          rows={billSchedules}
-          rowKey={(row) => row.id}
-          pageSize={5}
-          columns={[
-            {
-              key: "title",
-              header: "Schedule",
-              cell: (row) => (
-                <span>
-                  <span className="text-ink block text-[13px] font-medium">{row.title}</span>
-                  <span className="text-ink-subtle block text-xs">
-                    {humanize(row.billType)} · {humanize(row.frequency)}
-                  </span>
-                </span>
-              ),
-            },
-            {
-              key: "property",
-              header: "Property",
-              hideOnMobile: true,
-              cell: (row) => (
-                <span className="text-ink-muted block max-w-44 truncate text-[13px]">
-                  {row.propertyTitle}
-                </span>
-              ),
-            },
-            { key: "tenant", header: "Tenant", hideOnMobile: true, cell: (row) => <UserCell name={row.tenant.fullName} /> },
-            {
-              key: "next",
-              header: "Next due",
-              hideOnMobile: true,
-              cell: (row) => (
-                <span className="text-ink-muted flex items-center gap-1.5 text-xs">
-                  <CalendarClock className="size-3.5" />
-                  {formatDate(row.nextDueDate)}
-                </span>
-              ),
-            },
-            {
-              key: "amount",
-              header: "Amount",
-              align: "right",
-              cell: (row) => (
-                <span className="text-ink text-[13px] font-medium tabular-nums">
-                  {money(row.amount)}
-                </span>
-              ),
-            },
-            {
-              key: "state",
-              header: "State",
-              cell: (row) => (
-                <Badge tone={row.isActive ? "ok" : "neutral"}>
-                  {row.isActive ? "Running" : "Paused"}
-                </Badge>
-              ),
-            },
-            {
-              key: "actions",
-              header: "",
-              align: "right",
-              cell: (row) =>
-                row.isActive ? (
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={async () => {
-                      await cancelBillSchedule(row.id);
-                      schedules.refetch();
-                    }}
-                  >
-                    <RefreshCcw className="size-3.5" /> Cancel
-                  </Button>
-                ) : null,
-            },
-          ]}
-        />
+          <DataTable columns={columns} rows={rows} rowKey={(row) => row.id} pageSize={12} />
         )}
       </Card>
 
       <Drawer
-        open={reviewing != null}
-        onClose={() => setReviewing(null)}
-        title={reviewing ? `Verify ${reviewing.title}` : ""}
-        subtitle={reviewing?.propertyTitle}
-        footer={
-          <>
-            <Button
-              variant="danger"
-              onClick={async () => {
-                if (reviewing) await verifyBillPayment(reviewing.id, false, verifyNote);
-                setReviewing(null);
-                feed.refetch();
-              }}
-            >
-              <XCircle className="size-4" /> Reject
-            </Button>
-            <Button
-              variant="primary"
-              onClick={async () => {
-                if (reviewing) await verifyBillPayment(reviewing.id, true);
-                setReviewing(null);
-                feed.refetch();
-              }}
-            >
-              <CheckCircle2 className="size-4" /> Approve payment
-            </Button>
-          </>
-        }
+        open={open != null}
+        onClose={() => setOpen(null)}
+        title={open?.title ?? ""}
+        subtitle={open?.propertyTitle}
       >
-        {reviewing && (
+        {open && (
           <div className="space-y-5">
             <div className="bg-surface-muted border-line rounded-xl border p-4">
               <p className="text-ink-subtle text-xs">Amount billed</p>
               <p className="text-ink mt-1 text-2xl font-semibold tabular-nums">
-                {money(reviewing.amount)}
+                {money(open.amount)}
               </p>
-              {reviewing.paymentProof &&
-                Number(reviewing.paymentProof.paidAmount) !== Number(reviewing.amount) && (
-                  <p className="text-bad mt-1.5 text-[13px]">
-                    Tenant reported {money(reviewing.paymentProof.paidAmount)} — a shortfall of{" "}
-                    {money(Number(reviewing.amount) - Number(reviewing.paymentProof.paidAmount))}.
-                  </p>
-                )}
             </div>
 
             <DefinitionList
               items={[
-                { label: "Tenant", value: reviewing.tenant.fullName },
-                { label: "Landlord", value: reviewing.landlord.fullName },
-                { label: "Bill type", value: humanize(reviewing.billType) },
-                { label: "Due date", value: formatDate(reviewing.dueDate) },
-                {
-                  label: "Payment method",
-                  value: reviewing.paymentProof
-                    ? humanize(reviewing.paymentProof.paymentMethod)
-                    : "—",
-                },
-                {
-                  label: "Reference",
-                  value: reviewing.paymentProof?.transactionReference || "—",
-                },
-                {
-                  label: "Paid at",
-                  value: reviewing.paymentProof ? formatDateTime(reviewing.paymentProof.paidAt) : "—",
-                },
-                { label: "Raised", value: formatDate(reviewing.createdAt) },
+                { label: "Bill ID", value: `#${open.id}` },
+                { label: "Status", value: humanize(open.status) },
+                { label: "Tenant", value: open.tenant.fullName },
+                { label: "Landlord", value: open.landlord.fullName },
+                { label: "Bill type", value: humanize(open.billType) },
+                { label: "Due date", value: formatDate(open.dueDate) },
+                { label: "Raised", value: formatDate(open.createdAt) },
+                { label: "Lease", value: open.leaseId ? `#${open.leaseId}` : "—" },
               ]}
             />
 
-            <div>
-              <p className="text-ink mb-2 text-[13px] font-medium">Proof document</p>
-              {reviewing.paymentProof?.proofDocument ? (
-                <div className="border-line bg-surface-hover grid h-40 place-items-center rounded-xl border">
-                  <div className="text-center">
-                    <Receipt className="text-ink-subtle mx-auto size-6" />
-                    <p className="text-ink-muted mt-2 text-[13px]">
-                      {reviewing.paymentProof.proofDocument}
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <EmptyState
-                  icon={<Receipt className="size-5" />}
-                  title="No document attached"
-                  description="The tenant marked this as paid in cash without uploading a receipt."
+            {open.paymentProof ? (
+              <div>
+                <p className="text-ink mb-2 text-[13px] font-medium">Payment proof</p>
+                <DefinitionList
+                  items={[
+                    { label: "Method", value: humanize(open.paymentProof.paymentMethod) },
+                    { label: "Reference", value: open.paymentProof.transactionReference || "—" },
+                    { label: "Paid amount", value: money(open.paymentProof.paidAmount) },
+                    { label: "Paid at", value: formatDateTime(open.paymentProof.paidAt) },
+                  ]}
                 />
-              )}
-            </div>
-
-            <Field label="Rejection note" hint="Shown to the tenant if you reject the proof.">
-              <Textarea
-                value={verifyNote}
-                onChange={(e) => setVerifyNote(e.target.value)}
-                placeholder="The reference number does not match our bank statement."
+                {open.paymentProof.proofDocument && (
+                  <p className="text-ink-subtle mt-2 truncate text-xs">
+                    {open.paymentProof.proofDocument}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <EmptyState
+                icon={<Receipt className="size-5" />}
+                title="No payment proof"
+                description="The tenant has not submitted one for this bill."
               />
-            </Field>
+            )}
+
+            <p className="text-ink-subtle text-xs leading-5">
+              Verifying a payment is the landlord&rsquo;s action; the admin API exposes bills as
+              read-only.
+            </p>
           </div>
         )}
       </Drawer>
-
-      <Modal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        title="Raise a bill"
-        description="One-off or recurring, billed against an active lease."
-        footer={
-          <>
-            <Button onClick={() => setCreateOpen(false)}>Cancel</Button>
-            <Button variant="primary" onClick={() => setCreateOpen(false)}>
-              Raise bill
-            </Button>
-          </>
-        }
-      >
-        <div className="space-y-5">
-          <Field label="Lease">
-            <Select>
-              {leases
-                .filter((l) => l.status === "active")
-                .map((lease) => (
-                  <option key={lease.id} value={lease.id}>
-                    {lease.propertyTitle} — {lease.tenant.fullName}
-                  </option>
-                ))}
-            </Select>
-          </Field>
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Bill type">
-              <Select>
-                <option value="rent">Rent</option>
-                <option value="utility">Utility</option>
-                <option value="service_charge">Service charge</option>
-                <option value="maintenance">Maintenance</option>
-                <option value="other">Other</option>
-              </Select>
-            </Field>
-            <Field label="Frequency">
-              <Select>
-                <option value="one_time">One-time</option>
-                <option value="monthly">Monthly</option>
-                <option value="yearly">Yearly</option>
-              </Select>
-            </Field>
-            <Field label="Title">
-              <Input placeholder="November rent" />
-            </Field>
-            <Field label="Amount (৳)">
-              <Input type="number" placeholder="85000" />
-            </Field>
-            <Field label="Due date">
-              <Input type="date" />
-            </Field>
-          </div>
-          <Field label="Description" hint="Optional note shown to the tenant.">
-            <Textarea placeholder="Includes ৳6,500 service charge for the month." />
-          </Field>
-        </div>
-      </Modal>
     </>
   );
 }

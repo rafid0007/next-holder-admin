@@ -8,39 +8,46 @@ npm install
 npm run dev       # http://localhost:3000
 ```
 
-**Every screen reads live data from the API.** There are no fixtures left in the repo. Where an
-endpoint does not exist, the screen says so in place of the data rather than inventing it — those
-gaps are catalogued in `../next-holder-backend/API-GAPS.md`.
+**Every screen reads live data from the staff API at `/api/v1/admin/`.** There are no fixtures in
+the repo. Access is gated by the backend's role-based permissions: `GET /admin/me` decides what the
+signed-in admin can see, and the navigation, pages and buttons follow from it. The contract is
+`../next-holder-backend/docs/admin-panel-api.md`.
+
+> The `/admin/` API lives on the backend's **`dev`** branch. Point `NEXT_PUBLIC_API_BASE_URL` at a
+> server running that branch, with its migrations applied — a database that predates
+> `admin_panel/0001_initial` cannot serve it.
 
 ---
 
 ## Screens
 
-| Route | What it covers | Backing endpoints |
+Each page declares the permission it needs; an admin without it never sees the nav entry, and
+deep-linking shows an explanation rather than a failed request.
+
+| Route | What it covers | Permission |
 | --- | --- | --- |
-| `/` | Revenue by stream, work queue, portfolio status, rent collection, booking volume, activity feed | `landlord/finance/summary`, `landlord/reports/overview`, `bookings/reports/overview` |
-| `/properties` | Listings with status tabs, table/grid views, create flow, ownership transfers | `properties/`, `properties/transfer-requests/` |
-| `/properties/[id]` | Photo gallery, specs, amenities, marketplace toggle, units, leases, bookings, bills, maintenance, inquiries | `properties/{id}/…` plus each related list filtered by `propertyId` |
-| `/marketplace` | Public visibility, unlock and favourite economics, per-listing engagement | `marketplace/properties/`, `…/unlock`, `…/favorite` |
-| `/leases` | Lifecycle tabs, expandable rows with activate / terminate / upload contract, create flow | `leases/`, `…/activate`, `…/terminate` |
-| `/bookings` | Approval queue, revenue and volume charts, manual bookings, availability blocks, discounts | `bookings/`, `bookings/manual`, `properties/{id}/availability-blocks` |
-| `/rent` | Bills by state, collection donut, payment-proof review drawer, recurring schedules | `rent/bills/`, `…/verify-payment`, `rent/bill-schedules/` |
-| `/maintenance` | Pipeline board, category breakdown, request drawer with status changes, comments and forward-to-provider | `maintenance/requests/…` |
-| `/inquiries` | Two-pane inbox with reply and close | `property-inquiries/`, `…/reply`, `…/close` |
-| `/service-providers` | Verification applications with document review, active providers, work orders | `service-providers/admin/applications/…`, `…/work-orders/` |
-| `/users` | Landlords, tenants and providers; verification, provisional tenants, per-user drawer | `auth/users`, `auth/tenants/…` |
-| `/subscriptions` | Plan cards, limits and credit allowances, subscriber table with usage against limits | `subscriptions/plans/`, `subscriptions/me` |
-| `/credits` | Packages, wallets, full transaction ledger, admin grant | `credits/packages`, `credits/transactions`, `credits/admin/grant` |
-| `/taxonomy` | Categories → types master/detail, amenities and their applicable types | `properties/categories/…`, `properties/amenities/…` |
-| `/geo` | Division → district → thana → area browser, coverage, reverse lookup | `geo/divisions`, `geo/districts`, `geo/thanas`, `geo/areas`, `geo/reverse-admin` |
-| `/notifications` | Inbox, delivery channel matrix, announcement composer | `notifications/`, `…/read`, `…/read-all` |
-| `/settings` | Credit economy, property/booking defaults, verification rules, admin access, integrations | platform configuration |
-| `/login` | JWT sign-in by email or phone | `auth/signin`, `auth/token/refresh` |
+| `/` | Users, listings, bookings and moderation counters, income by stream | `dashboard.view` |
+| `/reports` | Six metrics over time from the timeseries endpoint | `analytics.view` |
+| `/properties` | Every landlord's listings with server-side filters, landlord column, hide/unhide | `listings.view` |
+| `/properties/[id]` | Any landlord's property: gallery, specs, moderation state, related records | `listings.view` |
+| `/marketplace` | The public marketplace as tenants see it | — |
+| `/leases` · `/bookings` · `/rent` · `/payments` | Platform-wide operations, read-only | `operations.view` |
+| `/promotions` | Landlord discounts and promo codes; staff switch them on or off | `promotions.view` |
+| `/maintenance` · `/inquiries` | Landlord-scoped — no admin equivalent yet | — |
+| `/service-providers` | Verification applications with documents; approve, reject, suspend, reinstate | `providers.view` |
+| `/moderation` | Booking complaints and provisional tenant reports | `reports.view` / `complaints.view` |
+| `/users` | Every account; suspend, verify, change roles, see activity | `users.view` |
+| `/subscriptions` | Plan CRUD, MRR, subscribers, assigning a user's plan | `subscriptions.view` |
+| `/credits` | Packages, every wallet, the full ledger, grant/refund/deduct | `credits.view` |
+| `/taxonomy` | Categories, types and amenities, including inactive rows | `listings.view` |
+| `/geo` | Division → district → thana → area, with create and cascade delete | `geo.manage` |
+| `/staff` | Staff members, role assignment, and a role editor over the permission catalog | `staff.view` |
+| `/audit` | Every staff write with before/after snapshots | `audit.view` |
+| `/notifications` · `/settings` | The admin's own inbox, and console configuration | — |
+| `/login` | JWT sign-in by email or phone | — |
 
-Shell features: collapsible grouped sidebar with live work-queue counts, ⌘K command palette
-over pages / properties / people, notification dropdown, light and dark themes.
-
----
+Shell features: permission-filtered sidebar with live work-queue counts, ⌘K command palette,
+notification panel, light and dark themes.
 
 ## Project layout
 
@@ -186,23 +193,16 @@ Two things to keep in mind when reading the responses:
 
 ### What the current API cannot do yet
 
-Full catalogue, with suggested endpoint shapes, in **`../next-holder-backend/API-GAPS.md`**.
-The ones that shape the UI most:
+The backend's `dev` branch closed almost every gap. What is left, and how the console handles it:
 
-- **Nearly every list is scoped to the caller.** `/properties/`, `/leases/`, `/bookings/`,
-  `/rent/bills/`, `/maintenance/requests/`, `/property-inquiries/`, `/credits/wallet`,
-  `/subscriptions/me` and `/landlord/finance/summary` all filter by `request.user`. So this is a
-  landlord console today, not a platform admin panel; `IsAdminUser` exists and is used by
-  `/credits/admin/grant`, it is simply not applied to the domain lists.
-- **`GET /properties/` filters only on the geo hierarchy**, so status, category, listing type,
-  city and search run in the browser over the paged-through set.
-- **No time series anywhere**, so every chart is a proportion or a donut rather than a trend.
-- **No cross-user wallets or subscriptions**, so those two tables are empty states that explain
-  what endpoint they need.
-- **Service provider administration is staff-only**, so a landlord account sees a 403 state there.
+- **No admin property create or edit.** `/admin/properties` is read plus hide/unhide, so those
+  buttons are gone rather than quietly writing through a landlord route.
+- **Operations are read-only.** Confirming a booking, verifying a payment proof and activating a
+  lease stay landlord actions, so those screens list and explain instead of acting.
+- **Maintenance and inquiries have no admin endpoints.** Both pages carry a banner saying they
+  show only the signed-in account's records.
+- **No admin work-order list**, so that panel names the endpoint it needs.
+- **Still missing per §15 of the spec:** `unlockCount`/`favoriteCount` on listings, a global
+  availability-blocks list, `commentsCount`/`mediaCount` on maintenance, `repliesCount` and a
+  detail route on inquiries, `requesterName` on work orders, and bulk actions.
 
-### Screens that show an empty state instead of data
-
-These are deliberate, and each names the endpoint it wants: the Credits "Wallets" tab, the
-Subscriptions subscriber table, and the Bookings page's availability blocks and discounts, which
-exist only under `/properties/{id}/`.

@@ -3,97 +3,113 @@
 import { useCallback } from "react";
 import Link from "next/link";
 import {
-  ArrowRight, Banknote, Building2, CalendarCheck, CircleAlert, Clock, FileText, Users, Wrench,
+  Banknote, Building2, CalendarCheck, CircleAlert, Coins, FileText, Gavel, ShieldCheck, Users,
 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
-import { Badge, StatusBadge, type Tone } from "@/components/ui/badge";
+import { Badge, type Tone } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { EmptyState, PageHeader, Progress, StatCard } from "@/components/ui/misc";
 import { CardSkeleton, ErrorState } from "@/components/ui/states";
 import { Donut } from "@/components/charts/donut";
+import { RequirePermission } from "@/components/layout/permission-gate";
 import { useApi } from "@/lib/api/hooks";
+import { useAdminSession } from "@/lib/api/admin-session";
 import {
-  getBookingReportOverview, getFinanceSummary, getReportOverview, listAllProperties,
-  listBills, listBookings, listFinanceTransactions, listLeases, listMaintenance,
-} from "@/lib/api/resources";
-import { formatDateTime, humanize, money, number } from "@/lib/utils";
+  getAdminBookingsOverview, getAdminFinanceSummary, getAdminReportOverview, getDashboardStats,
+} from "@/lib/api/admin";
+import { humanize, money, number } from "@/lib/utils";
 
 export default function DashboardPage() {
-  const finance = useApi(useCallback(() => getFinanceSummary(), []));
-  const report = useApi(useCallback(() => getReportOverview(), []));
-  const bookingReport = useApi(useCallback(() => getBookingReportOverview(), []));
-  const transactions = useApi(useCallback(() => listFinanceTransactions(), []));
-  const properties = useApi(useCallback(() => listAllProperties(), []));
+  return (
+    <RequirePermission codes={["dashboard.view"]}>
+      <Dashboard />
+    </RequirePermission>
+  );
+}
 
-  // The queue counts come from the same lists the detail screens use; each is a
-  // single page, which is enough for a count of outstanding work.
-  const leases = useApi(useCallback(() => listLeases(), []));
-  const bookings = useApi(useCallback(() => listBookings({ status: "pending" }), []));
-  const bills = useApi(useCallback(() => listBills({ status: "pending_verification" }), []));
-  const maintenance = useApi(useCallback(() => listMaintenance({ status: "pending" }), []));
+function Dashboard() {
+  const { can, me } = useAdminSession();
 
-  const pendingLeases = (leases.data?.results ?? []).filter((l) => l.status === "pending").length;
+  const stats = useApi(useCallback(() => getDashboardStats(), []));
+  const finance = useApi(
+    useCallback(
+      () => (can("finance.view") ? getAdminFinanceSummary() : Promise.resolve(null)),
+      [can],
+    ),
+  );
+  const report = useApi(
+    useCallback(
+      () => (can("analytics.view") ? getAdminReportOverview() : Promise.resolve(null)),
+      [can],
+    ),
+  );
+  const bookings = useApi(
+    useCallback(
+      () => (can("analytics.view") ? getAdminBookingsOverview() : Promise.resolve(null)),
+      [can],
+    ),
+  );
+
+  const data = stats.data;
 
   const queue = [
     {
-      label: "Leases awaiting signature",
-      count: pendingLeases,
-      href: "/leases",
-      icon: FileText,
-      tone: "warn" as Tone,
+      label: "Provider applications",
+      count: data?.moderation.pendingProviderApplications ?? 0,
+      href: "/service-providers",
+      icon: ShieldCheck,
+      tone: "ok" as Tone,
+      show: can("providers.view"),
     },
     {
-      label: "Bookings to approve",
-      count: bookings.data?.count ?? 0,
+      label: "Open complaints",
+      count: data?.moderation.openComplaints ?? 0,
+      href: "/moderation",
+      icon: Gavel,
+      tone: "bad" as Tone,
+      show: can("complaints.view"),
+    },
+    {
+      label: "Provisional tenant reports",
+      count: data?.moderation.openProvisionalReports ?? 0,
+      href: "/moderation",
+      icon: CircleAlert,
+      tone: "warn" as Tone,
+      show: can("reports.view"),
+    },
+    {
+      label: "Bookings pending approval",
+      count: data?.bookings.pending ?? 0,
       href: "/bookings",
       icon: CalendarCheck,
       tone: "brand" as Tone,
-    },
-    {
-      label: "Payment proofs to verify",
-      count: bills.data?.count ?? 0,
-      href: "/rent",
-      icon: Banknote,
-      tone: "info" as Tone,
-    },
-    {
-      label: "Maintenance requests pending",
-      count: maintenance.data?.count ?? 0,
-      href: "/maintenance",
-      icon: Wrench,
-      tone: "bad" as Tone,
+      show: can("operations.view"),
     },
     {
       label: "Unpaid bills",
       count: report.data?.unpaidBills ?? 0,
       href: "/rent",
-      icon: CircleAlert,
-      tone: "warn" as Tone,
+      icon: Banknote,
+      tone: "info" as Tone,
+      show: can("operations.view"),
     },
     {
-      label: "Confirmed bookings",
-      count: report.data?.totalConfirmedBookings ?? 0,
-      href: "/bookings",
-      icon: Users,
-      tone: "ok" as Tone,
+      label: "Listings hidden by staff",
+      count: data?.properties.hidden ?? 0,
+      href: "/properties",
+      icon: Building2,
+      tone: "neutral" as Tone,
+      show: can("listings.view"),
     },
-  ];
+  ].filter((item) => item.show);
 
-  const all = properties.data ?? [];
-  const statusSlices = [
-    { label: "Available", value: all.filter((p) => p.status === "available").length, color: "var(--ok)" },
-    { label: "Occupied", value: all.filter((p) => p.status === "occupied").length, color: "var(--brand)" },
-    { label: "Under maintenance", value: all.filter((p) => p.status === "maintenance").length, color: "var(--warn)" },
-    { label: "Unlisted", value: all.filter((p) => p.status === "unlisted").length, color: "var(--ink-subtle)" },
-  ];
-
-  if (finance.error) {
+  if (stats.error) {
     return (
       <>
-        <PageHeader title="Dashboard" description="Platform health across your portfolio." />
+        <PageHeader title="Dashboard" description="Platform health at a glance." />
         <Card>
           <CardBody className="py-10">
-            <ErrorState error={finance.error} onRetry={finance.refetch} resource="the dashboard" />
+            <ErrorState error={stats.error} onRetry={stats.refetch} resource="the dashboard" />
           </CardBody>
         </Card>
       </>
@@ -103,23 +119,31 @@ export default function DashboardPage() {
   return (
     <>
       <PageHeader
-        title="Dashboard"
-        description="Your portfolio across tenancies, bookings and money."
+        title={me ? `Welcome back, ${me.fullName.split(" ")[0]}` : "Dashboard"}
+        description="Platform health across users, listings, bookings and money."
         actions={
-          <Button
-            onClick={() => {
-              finance.refetch();
-              report.refetch();
-              bookingReport.refetch();
-            }}
-          >
-            Refresh
-          </Button>
+          <>
+            <Button
+              onClick={() => {
+                stats.refetch();
+                finance.refetch();
+                report.refetch();
+                bookings.refetch();
+              }}
+            >
+              Refresh
+            </Button>
+            {can("analytics.view") && (
+              <Link href="/reports">
+                <Button variant="primary">Open reports</Button>
+              </Link>
+            )}
+          </>
         }
       />
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {finance.loading && !finance.data ? (
+        {stats.loading && !data ? (
           Array.from({ length: 4 }, (_, i) => (
             <Card key={i}>
               <CardSkeleton />
@@ -128,120 +152,162 @@ export default function DashboardPage() {
         ) : (
           <>
             <StatCard
-              label="Total income"
-              value={money(finance.data?.totalIncome)}
-              hint="rent, bookings and sales"
-              icon={<Banknote className="size-4" />}
+              label="Users"
+              value={number(data?.users.total ?? 0)}
+              hint={`${number(data?.users.newLast30Days ?? 0)} in the last 30 days`}
+              icon={<Users className="size-4" />}
+              href="/users"
             />
             <StatCard
               label="Properties"
-              value={number(report.data?.totalProperties ?? all.length)}
-              hint={`${number(report.data?.listedProperties ?? 0)} in marketplace`}
+              value={number(data?.properties.total ?? 0)}
+              hint={`${number(data?.properties.listed ?? 0)} in the marketplace`}
               icon={<Building2 className="size-4" />}
               href="/properties"
             />
             <StatCard
               label="Active leases"
-              value={number(report.data?.activeLeases ?? 0)}
-              hint={`${number(report.data?.activeTenants ?? 0)} tenants`}
+              value={number(data?.activeLeases ?? 0)}
+              hint={`${number(data?.bookings.confirmed ?? 0)} confirmed bookings`}
               icon={<FileText className="size-4" />}
-              href="/leases"
             />
             <StatCard
-              label="Overdue"
-              value={money(finance.data?.overduePayments)}
-              hint={`${number(report.data?.unpaidBills ?? 0)} unpaid bills`}
-              icon={<CircleAlert className="size-4" />}
-              href="/rent"
+              label="Credits outstanding"
+              value={number(data?.credits.outstandingBalance ?? 0)}
+              hint="held in user wallets"
+              icon={<Coins className="size-4" />}
+              href="/credits"
             />
           </>
         )}
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
-        <Card className="lg:col-span-2">
-          <CardHeader
-            title="Income by stream"
-            description="Straight from the landlord finance summary."
-            action={<Badge tone="brand">All time</Badge>}
-          />
-          {finance.loading && !finance.data ? (
-            <CardSkeleton />
-          ) : (
-            <CardBody className="space-y-3.5">
-              {(
-                [
-                  ["Rent", finance.data?.rentIncome, "brand"],
-                  ["Bookings", finance.data?.bookingIncome, "ok"],
-                  ["Sales", finance.data?.saleIncome, "warn"],
-                  ["Pending", finance.data?.pendingPayments, "info"],
-                  ["Overdue", finance.data?.overduePayments, "bad"],
-                ] as const
-              ).map(([label, value, tone]) => (
-                <div key={label}>
-                  <div className="mb-1 flex items-baseline justify-between text-[13px]">
-                    <span className="text-ink font-medium">{label}</span>
-                    <span className="text-ink-muted tabular-nums">{money(value)}</span>
+        {can("finance.view") ? (
+          <Card className="lg:col-span-2">
+            <CardHeader
+              title="Income by stream"
+              description="Platform-wide, all time."
+              action={<Badge tone="brand">Live</Badge>}
+            />
+            {finance.loading && !finance.data ? (
+              <CardSkeleton />
+            ) : (
+              <CardBody className="space-y-3.5">
+                {(
+                  [
+                    ["Rent", finance.data?.rentIncome, "brand"],
+                    ["Bookings", finance.data?.bookingIncome, "ok"],
+                    ["Sales", finance.data?.saleIncome, "warn"],
+                    ["Pending", finance.data?.pendingPayments, "brand"],
+                    ["Overdue", finance.data?.overduePayments, "bad"],
+                  ] as const
+                ).map(([label, value, tone]) => (
+                  <div key={label}>
+                    <div className="mb-1 flex items-baseline justify-between text-[13px]">
+                      <span className="text-ink font-medium">{label}</span>
+                      <span className="text-ink-muted tabular-nums">{money(value)}</span>
+                    </div>
+                    <Progress
+                      value={Number(value ?? 0)}
+                      max={Math.max(Number(finance.data?.totalIncome ?? 0), 1)}
+                      tone={tone}
+                    />
                   </div>
-                  <Progress
-                    value={Number(value ?? 0)}
-                    max={Math.max(Number(finance.data?.totalIncome ?? 0), 1)}
-                    tone={tone === "info" ? "brand" : tone}
-                  />
+                ))}
+                <div className="border-line flex justify-between border-t pt-3 text-[13px]">
+                  <span className="text-ink-muted">Total income</span>
+                  <span className="text-ink font-semibold tabular-nums">
+                    {money(finance.data?.totalIncome)}
+                  </span>
                 </div>
-              ))}
+              </CardBody>
+            )}
+          </Card>
+        ) : (
+          <Card className="lg:col-span-2">
+            <CardHeader title="Income" description="Needs the finance.view permission." />
+            <CardBody>
+              <EmptyState
+                icon={<Banknote className="size-5" />}
+                title="Finance is restricted"
+                description="Ask a super admin to add finance.view to one of your roles."
+              />
             </CardBody>
-          )}
-        </Card>
+          </Card>
+        )}
 
         <Card>
-          <CardHeader title="Needs attention" description="Items waiting on you." />
-          <ul>
-            {queue.map((item) => (
-              <li key={item.label}>
-                <Link
-                  href={item.href}
-                  className="hover:bg-surface-hover border-line focus-ring flex items-center gap-3 border-b px-5 py-3 transition-colors last:border-0"
-                >
-                  <span className="bg-surface-hover text-ink-muted grid size-8 shrink-0 place-items-center rounded-lg">
-                    <item.icon className="size-4" />
-                  </span>
-                  <span className="text-ink min-w-0 flex-1 text-[13px]">{item.label}</span>
-                  <Badge tone={item.count > 0 ? item.tone : "neutral"}>{item.count}</Badge>
-                </Link>
-              </li>
-            ))}
-          </ul>
+          <CardHeader title="Needs attention" description="Work waiting on staff." />
+          {queue.length === 0 ? (
+            <CardBody>
+              <EmptyState icon={<Gavel className="size-5" />} title="Nothing assigned to you" />
+            </CardBody>
+          ) : (
+            <ul>
+              {queue.map((item) => (
+                <li key={item.label}>
+                  <Link
+                    href={item.href}
+                    className="hover:bg-surface-hover border-line focus-ring flex items-center gap-3 border-b px-5 py-3 transition-colors last:border-0"
+                  >
+                    <span className="bg-surface-hover text-ink-muted grid size-8 shrink-0 place-items-center rounded-lg">
+                      <item.icon className="size-4" />
+                    </span>
+                    <span className="text-ink min-w-0 flex-1 text-[13px]">{item.label}</span>
+                    <Badge tone={item.count > 0 ? item.tone : "neutral"}>{item.count}</Badge>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
         </Card>
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-3">
         <Card>
+          <CardHeader title="User mix" description={`${number(data?.users.total ?? 0)} accounts`} />
+          <CardBody>
+            {!data ? (
+              <CardSkeleton className="p-0" />
+            ) : (
+              <Donut
+                totalLabel="users"
+                total={data.users.total}
+                slices={[
+                  { label: "Tenants", value: data.users.tenants, color: "var(--brand)" },
+                  { label: "Landlords", value: data.users.landlords, color: "var(--ok)" },
+                  { label: "Providers", value: data.users.serviceProviders, color: "#38bdf8" },
+                ]}
+              />
+            )}
+          </CardBody>
+        </Card>
+
+        <Card>
           <CardHeader
-            title="Portfolio status"
-            description={`${number(all.length)} properties`}
+            title="Listings"
+            description={`${number(data?.properties.total ?? 0)} properties`}
           />
           <CardBody>
-            {properties.loading && !properties.data ? (
+            {!data ? (
               <CardSkeleton className="p-0" />
-            ) : all.length === 0 ? (
-              <EmptyState
-                icon={<Building2 className="size-5" />}
-                title="No properties yet"
-                description="Add your first property to see the breakdown here."
-                action={
-                  <Link href="/properties">
-                    <Button variant="primary">Add a property</Button>
-                  </Link>
-                }
-              />
             ) : (
               <>
-                <Donut slices={statusSlices} totalLabel="properties" />
+                <Donut
+                  totalLabel="properties"
+                  total={data.properties.total}
+                  slices={[
+                    { label: "In marketplace", value: data.properties.listed, color: "var(--ok)" },
+                    { label: "Occupied", value: data.properties.occupied, color: "var(--brand)" },
+                    { label: "Hidden by staff", value: data.properties.hidden, color: "var(--bad)" },
+                    { label: "Locked", value: data.properties.locked, color: "var(--warn)" },
+                  ]}
+                />
                 <div className="border-line mt-5 border-t pt-4">
                   <Progress
-                    value={report.data?.occupiedProperties ?? 0}
-                    max={Math.max(all.length, 1)}
+                    value={data.properties.occupied}
+                    max={Math.max(data.properties.total, 1)}
                     tone="brand"
                     label="Occupancy rate"
                   />
@@ -252,63 +318,14 @@ export default function DashboardPage() {
         </Card>
 
         <Card>
-          <CardHeader title="Rent collection" description="Across every bill raised." />
-          <CardBody className="space-y-5">
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <p className="text-ink-subtle text-xs">Collected</p>
-                <p className="text-ok mt-1 text-xl font-semibold tabular-nums">
-                  {money(finance.data?.rentIncome)}
-                </p>
-              </div>
-              <div>
-                <p className="text-ink-subtle text-xs">Outstanding</p>
-                <p className="text-bad mt-1 text-xl font-semibold tabular-nums">
-                  {money(report.data?.totalUnpaidAmount)}
-                </p>
-              </div>
-            </div>
-            <Progress
-              value={Number(finance.data?.rentIncome ?? 0)}
-              max={Math.max(
-                Number(finance.data?.rentIncome ?? 0) + Number(report.data?.totalUnpaidAmount ?? 0),
-                1,
-              )}
-              tone="ok"
-              label="Collection rate"
-            />
-            <ul className="space-y-2.5">
-              <li className="flex items-center justify-between text-[13px]">
-                <span className="text-ink-muted">Pending payments</span>
-                <span className="text-ink font-medium tabular-nums">
-                  {money(finance.data?.pendingPayments)}
-                </span>
-              </li>
-              <li className="flex items-center justify-between text-[13px]">
-                <span className="text-ink-muted">Overdue payments</span>
-                <span className="text-ink font-medium tabular-nums">
-                  {money(finance.data?.overduePayments)}
-                </span>
-              </li>
-              <li className="flex items-center justify-between text-[13px]">
-                <span className="text-ink-muted">Unpaid bills</span>
-                <span className="text-ink font-medium tabular-nums">
-                  {number(report.data?.unpaidBills ?? 0)}
-                </span>
-              </li>
-            </ul>
-          </CardBody>
-        </Card>
-
-        <Card>
           <CardHeader
             title="Bookings"
-            description={`${number(bookingReport.data?.totalBookings ?? 0)} in total`}
+            description={`${number(bookings.data?.totalBookings ?? 0)} in total`}
           />
           <CardBody className="space-y-3.5">
-            {bookingReport.loading && !bookingReport.data ? (
+            {bookings.loading && !bookings.data ? (
               <CardSkeleton className="p-0" />
-            ) : Object.keys(bookingReport.data?.byStatus ?? {}).length === 0 ? (
+            ) : Object.keys(bookings.data?.byStatus ?? {}).length === 0 ? (
               <EmptyState
                 icon={<CalendarCheck className="size-5" />}
                 title="No bookings yet"
@@ -316,7 +333,7 @@ export default function DashboardPage() {
               />
             ) : (
               <>
-                {Object.entries(bookingReport.data?.byStatus ?? {}).map(([status, count], index) => (
+                {Object.entries(bookings.data?.byStatus ?? {}).map(([status, count], index) => (
                   <div key={status}>
                     <div className="mb-1 flex items-baseline justify-between text-[13px]">
                       <span className="text-ink font-medium">{humanize(status)}</span>
@@ -324,22 +341,22 @@ export default function DashboardPage() {
                     </div>
                     <Progress
                       value={count}
-                      max={Math.max(bookingReport.data?.totalBookings ?? 1, 1)}
+                      max={Math.max(bookings.data?.totalBookings ?? 1, 1)}
                       tone={(["brand", "ok", "warn", "bad"] as const)[index % 4]}
                     />
                   </div>
                 ))}
-                <div className="border-line mt-1 border-t pt-3 text-[13px]">
+                <div className="border-line mt-1 space-y-1.5 border-t pt-3 text-[13px]">
                   <div className="flex justify-between">
                     <span className="text-ink-muted">Revenue</span>
                     <span className="text-ink font-medium tabular-nums">
-                      {money(bookingReport.data?.revenue)}
+                      {money(bookings.data?.revenue)}
                     </span>
                   </div>
-                  <div className="mt-1.5 flex justify-between">
+                  <div className="flex justify-between">
                     <span className="text-ink-muted">Cancellation rate</span>
                     <span className="text-ink font-medium tabular-nums">
-                      {((bookingReport.data?.cancellationRate ?? 0) * 100).toFixed(1)}%
+                      {(bookings.data?.cancellationRate ?? 0).toFixed(1)}%
                     </span>
                   </div>
                 </div>
@@ -348,74 +365,6 @@ export default function DashboardPage() {
           </CardBody>
         </Card>
       </div>
-
-      <Card className="mt-4">
-        <CardHeader
-          title="Recent transactions"
-          description="Rent and booking money, newest first."
-          action={
-            <Link href="/rent">
-              <Button size="sm" variant="ghost">
-                View bills <ArrowRight className="size-3.5" />
-              </Button>
-            </Link>
-          }
-        />
-        {transactions.error ? (
-          <CardBody>
-            <ErrorState
-              error={transactions.error}
-              onRetry={transactions.refetch}
-              resource="transactions"
-            />
-          </CardBody>
-        ) : transactions.loading && !transactions.data ? (
-          <CardSkeleton />
-        ) : (transactions.data ?? []).length === 0 ? (
-          <CardBody>
-            <EmptyState
-              icon={<Clock className="size-5" />}
-              title="No transactions yet"
-              description="Rent payments and booking income appear here as they land."
-            />
-          </CardBody>
-        ) : (
-          <ul>
-            {(transactions.data ?? []).slice(0, 8).map((entry) => (
-              <li
-                key={`${entry.source}-${entry.id}`}
-                className="border-line flex items-center gap-3 border-b px-5 py-3.5 last:border-0"
-              >
-                <span className="bg-surface-hover text-ink-subtle grid size-8 shrink-0 place-items-center rounded-lg">
-                  {entry.source === "booking" ? (
-                    <CalendarCheck className="size-4" />
-                  ) : (
-                    <Banknote className="size-4" />
-                  )}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="text-ink truncate text-[13px] font-medium">{entry.description}</p>
-                  <p className="text-ink-subtle truncate text-xs">
-                    {entry.propertyTitle} · {formatDateTime(entry.date)}
-                  </p>
-                </div>
-                <StatusBadge status={entry.status} />
-                <span className="text-ink shrink-0 text-[13px] font-medium tabular-nums">
-                  {money(entry.amount)}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </Card>
-
-      {report.data && (
-        <p className="text-ink-subtle mt-6 text-center text-xs">
-          {number(report.data.totalProperties)} properties ·{" "}
-          {number(report.data.activeLeases)} active leases ·{" "}
-          {number(report.data.pendingMaintenanceRequests)} maintenance requests pending
-        </p>
-      )}
     </>
   );
 }

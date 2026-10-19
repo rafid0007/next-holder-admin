@@ -5,14 +5,14 @@ import Link from "next/link";
 import Image from "next/image";
 import { useParams } from "next/navigation";
 import {
-  ArrowLeft, Ban, Bath, BedDouble, Building2, CalendarCheck, Copy, FileText,
-  Image as ImageIcon, MapPin, Pencil, Ruler, Send, Store, Users, Wrench,
+  ArrowLeft, Bath, BedDouble, Building2, CalendarCheck, Eye, EyeOff, FileText,
+  Image as ImageIcon, MapPin, Ruler, Send, Store, Users, Wrench,
 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/field";
-import { PropertyFormModal } from "@/components/properties/property-form";
+import { Field, Textarea } from "@/components/ui/field";
+import { Modal } from "@/components/ui/modal";
 import { DataTable } from "@/components/ui/table";
 import { Tabs } from "@/components/ui/tabs";
 import {
@@ -23,20 +23,31 @@ import {
 } from "@/components/ui/states";
 import { ApiError } from "@/lib/api/client";
 import { useApi, useApiWhen, type QueryState } from "@/lib/api/hooks";
+import { RequirePermission } from "@/components/layout/permission-gate";
+import { useAdminSession } from "@/lib/api/admin-session";
+import { getAdminProperty, hideProperty, unhideProperty } from "@/lib/api/admin";
+import type { AdminPropertyDetail } from "@/lib/api/admin-types";
 import {
-  getProperty, listPropertyBills, listPropertyBookings, listPropertyInquiries,
-  listPropertyLeases, listPropertyMaintenance, listUnits, toggleMarketplaceListing,
+  listPropertyBills, listPropertyBookings, listPropertyInquiries, listPropertyLeases,
+  listPropertyMaintenance, listUnits,
 } from "@/lib/api/resources";
-import type { ApiPropertyDetail, Paginated } from "@/lib/api/types";
+import type { Paginated } from "@/lib/api/types";
 import { cn, formatDate, formatDateTime, humanize, money, number } from "@/lib/utils";
 
 export default function PropertyDetailPage() {
+  return (
+    <RequirePermission codes={["listings.view"]}>
+      <PropertyDetail />
+    </RequirePermission>
+  );
+}
+
+function PropertyDetail() {
   const params = useParams<{ id: string }>();
   const id = Number(params.id);
   const [tab, setTab] = useState("overview");
-  const [editOpen, setEditOpen] = useState(false);
 
-  const property = useApi(useCallback(() => getProperty(id), [id]));
+  const property = useApi(useCallback(() => getAdminProperty(id), [id]));
 
   const units = useApiWhen(tab === "units", useCallback(() => listUnits(id), [id]));
   const leases = useApiWhen(tab === "leases", useCallback(() => listPropertyLeases(id), [id]));
@@ -92,23 +103,7 @@ export default function PropertyDetailPage() {
         description={`${address} · ${data.propertyType.name}`}
         actions={
           <>
-            <Button>
-              <Copy className="size-4" /> Duplicate
-            </Button>
-            <Button
-              onClick={() => setEditOpen(true)}
-              disabled={data.isLocked}
-              title={
-                data.isLocked
-                  ? "Locked properties are read-only until a plan slot frees up."
-                  : undefined
-              }
-            >
-              <Pencil className="size-4" /> Edit
-            </Button>
-            <Button variant="danger" disabled={data.isLocked}>
-              <Ban className="size-4" /> Unlist
-            </Button>
+            <ModerationButton property={data} onChanged={property.refetch} />
           </>
         }
       >
@@ -118,6 +113,7 @@ export default function PropertyDetailPage() {
             {humanize(data.listingType)}
           </Badge>
           {data.isLocked && <Badge tone="warn">Locked — over plan limit</Badge>}
+          {data.isAdminHidden && <Badge tone="bad">Hidden by staff</Badge>}
           {data.isMarketplaceExpired && <Badge tone="bad">Marketplace window expired</Badge>}
           {data.holding && <Badge tone="neutral">Holding {data.holding.number}</Badge>}
         </div>
@@ -549,7 +545,25 @@ export default function PropertyDetailPage() {
         </div>
 
         <div className="space-y-4">
-          <MarketplaceCard property={data} onChanged={property.refetch} />
+          <Card>
+            <CardHeader title="Landlord" />
+            <CardBody>
+              <div className="flex items-center gap-3">
+                <Avatar name={data.landlord.fullName} size="lg" />
+                <div className="min-w-0">
+                  <p className="text-ink truncate text-[13px] font-medium">
+                    {data.landlord.fullName}
+                  </p>
+                  <p className="text-ink-subtle truncate text-xs">{data.landlord.email}</p>
+                </div>
+              </div>
+              <Link href={`/users?search=${encodeURIComponent(data.landlord.email)}`}>
+                <Button className="mt-4 w-full justify-center">Open landlord</Button>
+              </Link>
+            </CardBody>
+          </Card>
+
+          <MarketplaceCard property={data} />
 
           <Card>
             <CardHeader title="Location" />
@@ -592,13 +606,6 @@ export default function PropertyDetailPage() {
           )}
         </div>
       </div>
-
-      <PropertyFormModal
-        open={editOpen}
-        onClose={() => setEditOpen(false)}
-        onSaved={property.refetch}
-        property={data}
-      />
     </>
   );
 }
@@ -640,67 +647,45 @@ function TabPanel<T>({
   return <>{children(state.data)}</>;
 }
 
-function MarketplaceCard({
-  property,
-  onChanged,
-}: {
-  property: ApiPropertyDetail;
-  onChanged: () => void;
-}) {
-  const [listed, setListed] = useState(property.isListedInMarketplace);
-  const [failure, setFailure] = useState<ApiError | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  async function toggle(next: boolean) {
-    setListed(next); // optimistic
-    setBusy(true);
-    setFailure(null);
-    try {
-      const updated = await toggleMarketplaceListing(property.id);
-      setListed(updated.isListedInMarketplace);
-      onChanged();
-    } catch (caught) {
-      setListed(!next); // revert
-      setFailure(
-        caught instanceof ApiError
-          ? caught
-          : new ApiError(0, "Could not update the marketplace listing"),
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-
+function MarketplaceCard({ property }: { property: AdminPropertyDetail }) {
   return (
     <Card>
-      <CardHeader title="Marketplace" description="Visibility and unlock economics." />
+      <CardHeader title="Marketplace" description="Visibility and moderation state." />
       <CardBody className="space-y-4">
         <div className="flex items-center justify-between gap-3">
-          <div>
-            <p className="text-ink flex items-center gap-1.5 text-[13px] font-medium">
-              <Store className="size-3.5" /> Listed publicly
-            </p>
-            <p className="text-ink-subtle text-xs">Costs tenants 2 credits to unlock.</p>
-          </div>
-          <span className={cn(busy && "pointer-events-none opacity-60")}>
-            <Switch checked={listed} onChange={toggle} label="Listed in marketplace" />
-          </span>
+          <p className="text-ink flex items-center gap-1.5 text-[13px] font-medium">
+            <Store className="size-3.5" /> Listed publicly
+          </p>
+          <Badge tone={property.isListedInMarketplace ? "ok" : "neutral"}>
+            {property.isListedInMarketplace ? "Live" : "Not listed"}
+          </Badge>
         </div>
+        <p className="text-ink-subtle text-xs leading-5">
+          Listing is the landlord&rsquo;s switch. Staff hide a listing instead, which removes it from
+          the marketplace and blocks them from re-listing it.
+        </p>
 
-        {failure && <InlineError error={failure} />}
+        {property.isAdminHidden && (
+          <div className="bg-bad-soft border-bad/25 rounded-xl border p-3.5">
+            <p className="text-bad text-[13px] font-medium">Hidden by staff</p>
+            <p className="text-bad mt-1 text-xs leading-5">
+              {property.moderation.reason || "No reason recorded."}
+            </p>
+            {property.moderation.hiddenBy && (
+              <p className="text-bad mt-1 text-xs">
+                {property.moderation.hiddenBy.email} ·{" "}
+                {formatDate(property.moderation.hiddenAt)}
+              </p>
+            )}
+          </div>
+        )}
 
         <DefinitionList
           items={[
             { label: "Views", value: number(property.viewCount) },
             { label: "Photos", value: number(property.images.length) },
-            {
-              label: "Window",
-              value: property.isMarketplaceExpired ? "Expired" : "Open",
-            },
-            {
-              label: "Locked",
-              value: property.isLocked ? "Over plan limit" : "No",
-            },
+            { label: "Locked by plan", value: property.isLocked ? "Yes" : "No" },
+            { label: "Window", value: property.isMarketplaceExpired ? "Expired" : "Open" },
           ]}
         />
       </CardBody>
@@ -708,7 +693,88 @@ function MarketplaceCard({
   );
 }
 
-function Gallery({ images }: { images: ApiPropertyDetail["images"] }) {
+/** Hide / unhide, shown only to staff holding `listings.moderate`. */
+function ModerationButton({
+  property,
+  onChanged,
+}: {
+  property: AdminPropertyDetail;
+  onChanged: () => void;
+}) {
+  const { can } = useAdminSession();
+  const [open, setOpen] = useState(false);
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<ApiError | null>(null);
+
+  if (!can("listings.moderate")) return null;
+  const hiding = !property.isAdminHidden;
+
+  async function submit() {
+    setBusy(true);
+    setFailure(null);
+    try {
+      if (hiding) await hideProperty(property.id, reason);
+      else await unhideProperty(property.id, reason || undefined);
+      setOpen(false);
+      setReason("");
+      onChanged();
+    } catch (caught) {
+      setFailure(caught instanceof ApiError ? caught : new ApiError(0, "Could not update"));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <>
+      <Button variant={hiding ? "danger" : "secondary"} onClick={() => setOpen(true)}>
+        {hiding ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+        {hiding ? "Hide listing" : "Unhide"}
+      </Button>
+
+      <Modal
+        open={open}
+        onClose={() => setOpen(false)}
+        size="sm"
+        title={hiding ? "Hide this listing" : "Unhide this listing"}
+        description={
+          hiding
+            ? "It leaves the marketplace immediately and the landlord cannot re-list it."
+            : "Clears the moderation flag; the landlord re-lists it themselves."
+        }
+        footer={
+          <>
+            <Button onClick={() => setOpen(false)}>Cancel</Button>
+            <Button
+              variant={hiding ? "danger" : "primary"}
+              disabled={busy || (hiding && !reason.trim())}
+              onClick={submit}
+            >
+              {busy ? "Saving…" : hiding ? "Hide listing" : "Unhide listing"}
+            </Button>
+          </>
+        }
+      >
+        <div className="space-y-4">
+          {failure && <InlineError error={failure} />}
+          <Field
+            label="Reason"
+            hint={hiding ? "Required, and shown to the landlord." : "Optional, stored on the audit log."}
+          >
+            <Textarea
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder={hiding ? "Duplicate listing" : "Resolved with the landlord"}
+            />
+          </Field>
+        </div>
+      </Modal>
+    </>
+  );
+}
+
+function Gallery({ images }: { images: AdminPropertyDetail["images"] }) {
   const [active, setActive] = useState(0);
 
   if (images.length === 0) {

@@ -11,20 +11,36 @@ import { Tabs } from "@/components/ui/tabs";
 import { DataTable } from "@/components/ui/table";
 import { EmptyState, PageHeader } from "@/components/ui/misc";
 import { useApi } from "@/lib/api/hooks";
-import { listAllProperties, listAmenities, listCategories } from "@/lib/api/resources";
+import { RequirePermission } from "@/components/layout/permission-gate";
+import { useAdminSession } from "@/lib/api/admin-session";
+import {
+  createAdminAmenity, createAdminCategory, createAdminType, listAdminAmenities,
+  listAdminCategories, listAdminProperties,
+} from "@/lib/api/admin";
 import { ErrorState, TableSkeleton } from "@/components/ui/states";
 import { cn, number } from "@/lib/utils";
 
 export default function TaxonomyPage() {
+  return (
+    <RequirePermission codes={["listings.view"]}>
+      <Taxonomy />
+    </RequirePermission>
+  );
+}
+
+function Taxonomy() {
+  const { can } = useAdminSession();
   const [tab, setTab] = useState("categories");
   const [activeCategory, setActiveCategory] = useState<number | null>(null);
   const [createOpen, setCreateOpen] = useState<"category" | "type" | "amenity" | null>(null);
+  const [draftName, setDraftName] = useState("");
+  const [draftOrder, setDraftOrder] = useState("10");
+  const [draftActive, setDraftActive] = useState(true);
 
-  const catalog = useApi(useCallback(() => listCategories(), []));
-  const amenityList = useApi(useCallback(() => listAmenities(), []));
-  // Usage counts come from the signed-in landlord's own portfolio — the API has
-  // no platform-wide count per type.
-  const portfolio = useApi(useCallback(() => listAllProperties(), []));
+  const catalog = useApi(useCallback(() => listAdminCategories(), []));
+  const amenityList = useApi(useCallback(() => listAdminAmenities(), []));
+  // Usage counts are platform-wide now that /admin/properties exists.
+  const portfolio = useApi(useCallback(() => listAdminProperties({ page_size: 100 }), []));
 
   const categories = useMemo(() => catalog.data ?? [], [catalog.data]);
   const amenities = useMemo(() => amenityList.data ?? [], [amenityList.data]);
@@ -33,7 +49,7 @@ export default function TaxonomyPage() {
   const types = selected?.types ?? [];
 
   const typeUsage = (typeId: number) =>
-    (portfolio.data ?? []).filter((p) => p.propertyType.id === typeId).length;
+    (portfolio.data?.results ?? []).filter((p) => p.propertyType.id === typeId).length;
 
   return (
     <>
@@ -41,6 +57,7 @@ export default function TaxonomyPage() {
         title="Taxonomy"
         description="Property categories, the types inside each, and the amenities a type can offer."
         actions={
+          can("taxonomy.manage") && (
           <Button
             variant="primary"
             onClick={() =>
@@ -48,8 +65,9 @@ export default function TaxonomyPage() {
             }
           >
             <Plus className="size-4" />
-            {tab === "amenities" ? "New amenity" : tab === "types" ? "New type" : "New category"}
+            {tab === "amenities" ? "New amenity" : "New category"}
           </Button>
+          )
         }
       />
 
@@ -117,9 +135,11 @@ export default function TaxonomyPage() {
                     <Badge tone={selected?.isActive ? "ok" : "neutral"}>
                       {selected?.isActive ? "Active" : "Hidden"}
                     </Badge>
-                    <Button size="sm" onClick={() => setCreateOpen("type")}>
-                      <Plus className="size-3.5" /> Add type
-                    </Button>
+                    {can("taxonomy.manage") && (
+                      <Button size="sm" onClick={() => setCreateOpen("type")}>
+                        <Plus className="size-3.5" /> Add type
+                      </Button>
+                    )}
                   </>
                 }
               />
@@ -192,7 +212,7 @@ export default function TaxonomyPage() {
                       align: "right",
                       cell: (row) => (
                         <span className="flex justify-end gap-1">
-                          <Button size="sm" variant="ghost">
+                          <Button size="sm" variant="ghost" disabled={!can("taxonomy.manage")}>
                             Edit
                           </Button>
                           <Button
@@ -256,11 +276,11 @@ export default function TaxonomyPage() {
               },
               {
                 key: "usage",
-                header: "In portfolio",
+                header: "Properties",
                 align: "right",
                 cell: (row) => (
                   <span className="text-ink-muted text-[13px] tabular-nums">
-                    {(portfolio.data ?? []).filter((p) =>
+                    {(portfolio.data?.results ?? []).filter((p) =>
                       p.amenities.some((a) => a.id === row.id),
                     ).length}
                   </span>
@@ -305,7 +325,21 @@ export default function TaxonomyPage() {
         footer={
           <>
             <Button onClick={() => setCreateOpen(null)}>Cancel</Button>
-            <Button variant="primary" onClick={() => setCreateOpen(null)}>
+            <Button
+              variant="primary"
+              disabled={!draftName.trim()}
+              onClick={async () => {
+                const body = { name: draftName, order: Number(draftOrder) || 0, isActive: draftActive };
+                if (createOpen === "category") await createAdminCategory(body);
+                else if (createOpen === "type")
+                  await createAdminType(Number(activeCategory ?? categories[0]?.id), body);
+                else await createAdminAmenity(body);
+                setDraftName("");
+                setCreateOpen(null);
+                catalog.refetch();
+                amenityList.refetch();
+              }}
+            >
               Create
             </Button>
           </>
@@ -325,6 +359,8 @@ export default function TaxonomyPage() {
           )}
           <Field label="Name">
             <Input
+              value={draftName}
+              onChange={(e) => setDraftName(e.target.value)}
               placeholder={
                 createOpen === "amenity"
                   ? "Swimming pool"
@@ -340,24 +376,22 @@ export default function TaxonomyPage() {
             </Field>
           )}
           <Field label="Display order" hint="Lower numbers appear first.">
-            <Input type="number" defaultValue={10} />
+            <Input
+              type="number"
+              value={draftOrder}
+              onChange={(e) => setDraftOrder(e.target.value)}
+            />
           </Field>
-          <TaxonomyActiveToggle />
+          <div className="border-line bg-surface-muted flex items-center justify-between rounded-xl border p-4">
+            <div>
+              <p className="text-ink text-[13px] font-medium">Visible to landlords</p>
+              <p className="text-ink-subtle text-xs">Hidden entries stay on existing properties.</p>
+            </div>
+            <Switch checked={draftActive} onChange={setDraftActive} label="Visible to landlords" />
+          </div>
         </div>
       </Modal>
     </>
   );
 }
 
-function TaxonomyActiveToggle() {
-  const [on, setOn] = useState(true);
-  return (
-    <div className="border-line bg-surface-muted flex items-center justify-between rounded-xl border p-4">
-      <div>
-        <p className="text-ink text-[13px] font-medium">Visible to landlords</p>
-        <p className="text-ink-subtle text-xs">Hidden entries stay on existing properties.</p>
-      </div>
-      <Switch checked={on} onChange={setOn} label="Visible to landlords" />
-    </div>
-  );
-}

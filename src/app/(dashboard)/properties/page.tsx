@@ -4,23 +4,24 @@ import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
 import {
-  Bath, BedDouble, Building2, Eye, MoreHorizontal, Plus, RefreshCcw, Ruler, Store, Upload,
+  Bath, BedDouble, Building2, Eye, EyeOff, RefreshCcw, Ruler, Store,
 } from "lucide-react";
-import { Card, CardBody, CardHeader } from "@/components/ui/card";
+import { Card, CardBody } from "@/components/ui/card";
 import { Badge, StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { SearchInput, Select } from "@/components/ui/field";
-import { PropertyFormModal } from "@/components/properties/property-form";
+import { Field, SearchInput, Select, Textarea } from "@/components/ui/field";
+import { Modal } from "@/components/ui/modal";
 import { DataTable, type Column } from "@/components/ui/table";
 import { SegmentedControl, Tabs } from "@/components/ui/tabs";
-import { EmptyState, FilterBar, PageHeader, StatCard } from "@/components/ui/misc";
-import { CardSkeleton, ErrorState, TableSkeleton } from "@/components/ui/states";
+import { EmptyState, FilterBar, PageHeader, StatCard, UserCell } from "@/components/ui/misc";
+import { CardSkeleton, ErrorState, InlineError, TableSkeleton } from "@/components/ui/states";
+import { RequirePermission } from "@/components/layout/permission-gate";
+import { ApiError } from "@/lib/api/client";
 import { useApi } from "@/lib/api/hooks";
-import {
-  acceptTransfer, listAllProperties, listTransferRequests, rejectTransfer,
-} from "@/lib/api/resources";
-import type { ApiProperty, ApiTransferRequest, PropertyCategory } from "@/lib/api/types";
-import { cn, formatDate, humanize, money, number } from "@/lib/utils";
+import { useAdminSession } from "@/lib/api/admin-session";
+import { getDashboardStats, hideProperty, listAdminCategories, listAdminProperties, unhideProperty } from "@/lib/api/admin";
+import type { AdminProperty } from "@/lib/api/admin-types";
+import { cn, humanize, money, number } from "@/lib/utils";
 
 const statusTabs = [
   { id: "all", label: "All" },
@@ -31,68 +32,61 @@ const statusTabs = [
 ];
 
 export default function PropertiesPage() {
+  return (
+    <RequirePermission codes={["listings.view"]}>
+      <Properties />
+    </RequirePermission>
+  );
+}
+
+function Properties() {
+  const { can } = useAdminSession();
   const [tab, setTab] = useState("all");
   const [view, setView] = useState("table");
-  const [query, setQuery] = useState("");
+  const [search, setSearch] = useState("");
   const [categoryId, setCategoryId] = useState("all");
   const [listingType, setListingType] = useState("all");
-  const [city, setCity] = useState("all");
-  const [createOpen, setCreateOpen] = useState(false);
+  const [hidden, setHidden] = useState("all");
+  const [ordering, setOrdering] = useState("-createdAt");
+  const [moderating, setModerating] = useState<AdminProperty | null>(null);
 
-  const properties = useApi(useCallback(() => listAllProperties(), []));
-  const transfers = useApi(useCallback(() => listTransferRequests(), []));
-
-  const all = useMemo(() => properties.data ?? [], [properties.data]);
-
-  const cities = useMemo(
-    () => Array.from(new Set(all.map((p) => p.city).filter(Boolean))).sort(),
-    [all],
+  // Every filter is server-side now, so the page holds no client-side pass.
+  const feed = useApi(
+    useCallback(
+      () =>
+        listAdminProperties({
+          status: tab === "all" ? undefined : tab,
+          categoryId: categoryId === "all" ? undefined : Number(categoryId),
+          listingType: listingType === "all" ? undefined : listingType,
+          isHidden: hidden === "all" ? undefined : hidden === "hidden",
+          search: search.trim() || undefined,
+          ordering,
+        }),
+      [tab, categoryId, listingType, hidden, search, ordering],
+    ),
+  );
+  const categories = useApi(useCallback(() => listAdminCategories(), []));
+  const stats = useApi(
+    useCallback(
+      () => (can("dashboard.view") ? getDashboardStats() : Promise.resolve(null)),
+      [can],
+    ),
   );
 
-  const categories = useMemo(() => {
-    const seen = new Map<number, PropertyCategory>();
-    for (const property of all) seen.set(property.propertyCategory.id, property.propertyCategory);
-    return [...seen.values()].sort((a, b) => a.name.localeCompare(b.name));
-  }, [all]);
+  const rows = useMemo(() => feed.data?.results ?? [], [feed.data]);
+  const counts = stats.data?.properties;
 
-  // Applied in the browser: GET /properties/ filters only by the geo hierarchy.
-  const rows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return all.filter((p) => {
-      if (tab !== "all" && p.status !== tab) return false;
-      if (categoryId !== "all" && p.propertyCategory.id !== Number(categoryId)) return false;
-      if (listingType !== "all" && p.listingType !== listingType) return false;
-      if (city !== "all" && p.city !== city) return false;
-      if (q && !`${p.title} ${p.neighborhood} ${p.city} ${p.street}`.toLowerCase().includes(q))
-        return false;
-      return true;
-    });
-  }, [all, tab, query, categoryId, listingType, city]);
-
-  const counts = useMemo(
-    () =>
-      statusTabs.map((t) => ({
-        ...t,
-        count: t.id === "all" ? all.length : all.filter((p) => p.status === t.id).length,
-      })),
-    [all],
-  );
-
-  const listed = all.filter((p) => p.isListedInMarketplace).length;
-  const occupied = all.filter((p) => p.status === "occupied").length;
-  const pendingTransfers = (transfers.data ?? []).filter((t) => t.status === "pending").length;
-
-  const columns: Column<ApiProperty>[] = [
+  const columns: Column<AdminProperty>[] = [
     {
       key: "title",
       header: "Property",
-      sortValue: (row) => row.title,
       cell: (row) => (
         <Link href={`/properties/${row.id}`} className="focus-ring group flex items-center gap-3">
           <PropertyThumb image={row.primaryImage?.imageUrl} className="size-9 rounded-lg" />
           <span className="min-w-0">
-            <span className="text-ink block max-w-64 truncate text-[13px] font-medium group-hover:underline">
-              {row.title}
+            <span className="text-ink flex items-center gap-1.5 text-[13px] font-medium">
+              <span className="max-w-56 truncate group-hover:underline">{row.title}</span>
+              {row.isAdminHidden && <EyeOff className="text-bad size-3.5 shrink-0" />}
             </span>
             <span className="text-ink-subtle block truncate text-xs">
               {[row.neighborhood, row.city].filter(Boolean).join(", ")} · {row.propertyType.name}
@@ -102,13 +96,10 @@ export default function PropertiesPage() {
       ),
     },
     {
-      key: "category",
-      header: "Category",
+      key: "landlord",
+      header: "Landlord",
       hideOnMobile: true,
-      sortValue: (row) => row.propertyCategory.name,
-      cell: (row) => (
-        <span className="text-ink-muted text-[13px]">{row.propertyCategory.name}</span>
-      ),
+      cell: (row) => <UserCell name={row.landlord.fullName} meta={row.landlord.email} />,
     },
     {
       key: "listingType",
@@ -154,7 +145,6 @@ export default function PropertiesPage() {
       header: "Views",
       align: "right",
       hideOnMobile: true,
-      sortValue: (row) => row.viewCount,
       cell: (row) => (
         <span className="text-ink-muted flex items-center justify-end gap-1 text-[13px] tabular-nums">
           <Eye className="text-ink-subtle size-3.5" />
@@ -166,13 +156,9 @@ export default function PropertiesPage() {
       key: "rent",
       header: "Price",
       align: "right",
-      sortValue: (row) => Number(row.rentAmount),
       cell: (row) => (
         <span className="text-ink text-[13px] font-medium tabular-nums">
           {money(row.rentAmount)}
-          {row.listingType === "for_book" && (
-            <span className="text-ink-subtle font-normal"> /slot</span>
-          )}
           {row.listingType === "for_rent" && (
             <span className="text-ink-subtle font-normal"> /mo</span>
           )}
@@ -182,19 +168,30 @@ export default function PropertiesPage() {
     {
       key: "status",
       header: "Status",
-      sortValue: (row) => row.status,
-      cell: (row) => <StatusBadge status={row.status} />,
+      cell: (row) => (
+        <span className="flex flex-col items-start gap-1">
+          <StatusBadge status={row.status} />
+          {row.isAdminHidden && <Badge tone="bad">Hidden</Badge>}
+        </span>
+      ),
     },
     {
       key: "actions",
       header: "",
       align: "right",
-      width: "48px",
-      cell: () => (
-        <Button size="icon" variant="ghost" aria-label="Row actions">
-          <MoreHorizontal className="size-4" />
-        </Button>
-      ),
+      cell: (row) =>
+        can("listings.moderate") ? (
+          <Button
+            size="sm"
+            variant={row.isAdminHidden ? "subtle" : "ghost"}
+            onClick={(event) => {
+              event.stopPropagation();
+              setModerating(row);
+            }}
+          >
+            {row.isAdminHidden ? "Unhide" : "Hide"}
+          </Button>
+        ) : null,
     },
   ];
 
@@ -202,25 +199,19 @@ export default function PropertiesPage() {
     <>
       <PageHeader
         title="Properties"
-        description="Listings owned by the signed-in landlord, with tenancy state and marketplace visibility."
+        description="Every landlord's listings, including hidden and soft-deleted ones."
         actions={
           <>
-            <Button onClick={properties.refetch} disabled={properties.loading}>
-              <RefreshCcw className={cn("size-4", properties.loading && "animate-spin")} />
+            <Button onClick={feed.refetch} disabled={feed.loading}>
+              <RefreshCcw className={cn("size-4", feed.loading && "animate-spin")} />
               Refresh
-            </Button>
-            <Button>
-              <Upload className="size-4" /> Import
-            </Button>
-            <Button variant="primary" onClick={() => setCreateOpen(true)}>
-              <Plus className="size-4" /> Add property
             </Button>
           </>
         }
       />
 
       <div className="mb-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-        {properties.loading && !properties.data ? (
+        {stats.loading && !stats.data ? (
           Array.from({ length: 4 }, (_, i) => (
             <Card key={i}>
               <CardSkeleton />
@@ -228,33 +219,37 @@ export default function PropertiesPage() {
           ))
         ) : (
           <>
-            <StatCard label="Total properties" value={number(all.length)} hint="in your portfolio" />
             <StatCard
-              label="In marketplace"
-              value={number(listed)}
-              hint={`${number(all.length - listed)} hidden`}
+              label="Total properties"
+              value={number(counts?.total ?? feed.data?.count ?? 0)}
+              hint={`${number(counts?.newLast30Days ?? 0)} in the last 30 days`}
             />
+            <StatCard label="In marketplace" value={number(counts?.listed ?? 0)} />
             <StatCard
               label="Occupied"
-              value={all.length ? `${Math.round((occupied / all.length) * 100)}%` : "—"}
+              value={
+                counts?.total
+                  ? `${Math.round((counts.occupied / counts.total) * 100)}%`
+                  : "—"
+              }
               hint="occupancy"
             />
             <StatCard
-              label="Pending transfers"
-              value={number(pendingTransfers)}
-              hint="awaiting acceptance"
+              label="Hidden by staff"
+              value={number(counts?.hidden ?? 0)}
+              hint={`${number(counts?.locked ?? 0)} locked by plan limit`}
             />
           </>
         )}
       </div>
 
       <Card>
-        <Tabs items={counts} value={tab} onChange={setTab} className="px-3" />
+        <Tabs items={statusTabs} value={tab} onChange={setTab} className="px-3" />
         <FilterBar>
           <SearchInput
-            placeholder="Search title, area or address…"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search title, address or landlord…"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
             className="w-full sm:w-72"
           />
           <Select
@@ -264,7 +259,7 @@ export default function PropertiesPage() {
             className="w-auto"
           >
             <option value="all">All categories</option>
-            {categories.map((c) => (
+            {(categories.data ?? []).map((c) => (
               <option key={c.id} value={c.id}>
                 {c.name}
               </option>
@@ -281,13 +276,27 @@ export default function PropertiesPage() {
             <option value="for_sale">For sale</option>
             <option value="for_book">For book</option>
           </Select>
-          <Select aria-label="City" value={city} onChange={(e) => setCity(e.target.value)} className="w-auto">
-            <option value="all">All cities</option>
-            {cities.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
+          <Select
+            aria-label="Moderation"
+            value={hidden}
+            onChange={(e) => setHidden(e.target.value)}
+            className="w-auto"
+          >
+            <option value="all">Any visibility</option>
+            <option value="hidden">Hidden by staff</option>
+            <option value="visible">Not hidden</option>
+          </Select>
+          <Select
+            aria-label="Sort"
+            value={ordering}
+            onChange={(e) => setOrdering(e.target.value)}
+            className="w-auto"
+          >
+            <option value="-createdAt">Newest first</option>
+            <option value="createdAt">Oldest first</option>
+            <option value="-rentAmount">Highest price</option>
+            <option value="rentAmount">Lowest price</option>
+            <option value="title">Title A–Z</option>
           </Select>
           <div className="ml-auto">
             <SegmentedControl
@@ -301,44 +310,30 @@ export default function PropertiesPage() {
           </div>
         </FilterBar>
 
-        {properties.error ? (
+        {feed.error ? (
           <CardBody>
-            <ErrorState
-              error={properties.error}
-              onRetry={properties.refetch}
-              resource="properties"
-            />
+            <ErrorState error={feed.error} onRetry={feed.refetch} resource="properties" />
           </CardBody>
-        ) : properties.loading && !properties.data ? (
+        ) : feed.loading && !feed.data ? (
           <TableSkeleton rows={6} columns={6} />
         ) : rows.length === 0 ? (
           <CardBody>
             <EmptyState
               icon={<Building2 className="size-5" />}
-              title={all.length === 0 ? "No properties yet" : "No properties match these filters"}
-              description={
-                all.length === 0
-                  ? "Add the first property to this landlord account to see it here."
-                  : "Clear a filter or widen the search to see more listings."
-              }
+              title="No properties match"
+              description="Clear a filter or widen the search."
               action={
-                all.length === 0 ? (
-                  <Button variant="primary" onClick={() => setCreateOpen(true)}>
-                    <Plus className="size-4" /> Add property
-                  </Button>
-                ) : (
-                  <Button
-                    onClick={() => {
-                      setQuery("");
-                      setCategoryId("all");
-                      setListingType("all");
-                      setCity("all");
-                      setTab("all");
-                    }}
-                  >
-                    Reset filters
-                  </Button>
-                )
+                <Button
+                  onClick={() => {
+                    setSearch("");
+                    setCategoryId("all");
+                    setListingType("all");
+                    setHidden("all");
+                    setTab("all");
+                  }}
+                >
+                  Reset filters
+                </Button>
               }
             />
           </CardBody>
@@ -355,130 +350,96 @@ export default function PropertiesPage() {
         )}
       </Card>
 
-      <Card className="mt-4">
-        <CardHeader
-          title="Ownership transfers"
-          description="Transfer requests you have sent or received, pending acceptance."
-        />
-        {transfers.error ? (
-          <CardBody>
-            <ErrorState
-              error={transfers.error}
-              onRetry={transfers.refetch}
-              resource="transfer requests"
-            />
-          </CardBody>
-        ) : transfers.loading && !transfers.data ? (
-          <TableSkeleton rows={3} columns={5} />
-        ) : (transfers.data ?? []).length === 0 ? (
-          <CardBody>
-            <EmptyState
-              icon={<Building2 className="size-5" />}
-              title="No transfer requests"
-              description="Ownership handovers you send or receive will appear here."
-            />
-          </CardBody>
-        ) : (
-          <DataTable
-            rows={transfers.data ?? []}
-            rowKey={(row) => row.id}
-            pageSize={5}
-            columns={transferColumns(transfers.refetch)}
-          />
-        )}
-      </Card>
-
-      <PropertyFormModal
-        open={createOpen}
-        onClose={() => setCreateOpen(false)}
-        onSaved={properties.refetch}
+      <ModerationModal
+        property={moderating}
+        onClose={() => setModerating(null)}
+        onDone={feed.refetch}
       />
+
     </>
   );
 }
 
-function transferColumns(onChanged: () => void): Column<ApiTransferRequest>[] {
-  return [
-    {
-      key: "property",
-      header: "Property",
-      cell: (row) => (
-        <Link
-          href={`/properties/${row.property}`}
-          className="focus-ring text-ink block max-w-56 truncate text-[13px] font-medium hover:underline"
-        >
-          {row.propertyTitle}
-        </Link>
-      ),
-    },
-    {
-      key: "from",
-      header: "From",
-      hideOnMobile: true,
-      cell: (row) => <span className="text-ink-muted text-[13px]">{row.fromLandlord.fullName}</span>,
-    },
-    {
-      key: "to",
-      header: "To",
-      hideOnMobile: true,
-      cell: (row) => <span className="text-ink-muted text-[13px]">{row.toLandlord.fullName}</span>,
-    },
-    {
-      key: "sent",
-      header: "Requested",
-      hideOnMobile: true,
-      sortValue: (row) => row.sentAt,
-      cell: (row) => <span className="text-ink-muted text-xs">{formatDate(row.sentAt)}</span>,
-    },
-    { key: "status", header: "Status", cell: (row) => <StatusBadge status={row.status} /> },
-    {
-      key: "actions",
-      header: "",
-      align: "right",
-      cell: (row) =>
-        row.status === "pending" ? <TransferActions request={row} onChanged={onChanged} /> : null,
-    },
-  ];
-}
-
-function TransferActions({
-  request,
-  onChanged,
+function ModerationModal({
+  property,
+  onClose,
+  onDone,
 }: {
-  request: ApiTransferRequest;
-  onChanged: () => void;
+  property: AdminProperty | null;
+  onClose: () => void;
+  onDone: () => void;
 }) {
+  const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
+  const [failure, setFailure] = useState<ApiError | null>(null);
+  const hiding = property ? !property.isAdminHidden : true;
 
-  async function run(action: () => Promise<unknown>) {
+  async function submit() {
+    if (!property) return;
     setBusy(true);
+    setFailure(null);
     try {
-      await action();
-      onChanged();
+      if (hiding) await hideProperty(property.id, reason);
+      else await unhideProperty(property.id, reason || undefined);
+      setReason("");
+      onDone();
+      onClose();
+    } catch (caught) {
+      setFailure(caught instanceof ApiError ? caught : new ApiError(0, "Could not update"));
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div className="flex justify-end gap-1.5">
-      <Button
-        size="sm"
-        variant="subtle"
-        disabled={busy}
-        onClick={() => run(() => acceptTransfer(request.id))}
-      >
-        Accept
-      </Button>
-      <Button
-        size="sm"
-        variant="danger"
-        disabled={busy}
-        onClick={() => run(() => rejectTransfer(request.id, "Declined from the admin console."))}
-      >
-        Reject
-      </Button>
-    </div>
+    <Modal
+      open={property != null}
+      onClose={onClose}
+      size="sm"
+      title={hiding ? "Hide this listing" : "Unhide this listing"}
+      description={
+        hiding
+          ? "It leaves the marketplace immediately and the landlord cannot re-list it."
+          : "The moderation flag is cleared; the landlord re-lists it themselves."
+      }
+      footer={
+        <>
+          <Button onClick={onClose}>Cancel</Button>
+          <Button
+            variant={hiding ? "danger" : "primary"}
+            disabled={busy || (hiding && !reason.trim())}
+            onClick={submit}
+          >
+            {busy ? "Saving…" : hiding ? "Hide listing" : "Unhide listing"}
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4">
+        {failure && <InlineError error={failure} />}
+        {property && (
+          <p className="text-ink-muted text-[13px]">
+            <span className="text-ink font-medium">{property.title}</span> ·{" "}
+            {property.landlord.fullName}
+          </p>
+        )}
+        {!hiding && property?.moderation.reason && (
+          <p className="text-ink-subtle text-[13px]">
+            Hidden for: {property.moderation.reason}
+          </p>
+        )}
+        <Field
+          label="Reason"
+          hint={hiding ? "Required, and shown to the landlord." : "Optional, stored on the audit log."}
+        >
+          <Textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder={hiding ? "Duplicate listing" : "Resolved with the landlord"}
+          />
+        </Field>
+      </div>
+    </Modal>
   );
 }
 
@@ -509,7 +470,7 @@ export function PropertyThumb({
   );
 }
 
-function PropertyCard({ property }: { property: ApiProperty }) {
+function PropertyCard({ property }: { property: AdminProperty }) {
   return (
     <Link
       href={`/properties/${property.id}`}
@@ -517,17 +478,16 @@ function PropertyCard({ property }: { property: ApiProperty }) {
     >
       <div className="bg-surface-hover relative h-36">
         <PropertyThumb image={property.primaryImage?.imageUrl} className="h-36 w-full" />
-        <span className="absolute top-2.5 left-2.5">
+        <span className="absolute top-2.5 left-2.5 flex gap-1.5">
           <StatusBadge status={property.status} />
+          {property.isAdminHidden && <Badge tone="bad">Hidden</Badge>}
         </span>
       </div>
       <div className="p-4">
         <p className="text-ink truncate text-[13px] font-medium group-hover:underline">
           {property.title}
         </p>
-        <p className="text-ink-subtle mt-0.5 truncate text-xs">
-          {[property.neighborhood, property.city].filter(Boolean).join(", ")}
-        </p>
+        <p className="text-ink-subtle mt-0.5 truncate text-xs">{property.landlord.fullName}</p>
         <div className="mt-3 flex items-end justify-between">
           <span className="text-ink text-[15px] font-semibold tabular-nums">
             {money(property.rentAmount)}

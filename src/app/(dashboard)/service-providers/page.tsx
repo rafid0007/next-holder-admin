@@ -7,7 +7,7 @@ import {
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Field, SearchInput, Select, Textarea } from "@/components/ui/field";
+import { Field, SearchInput, Textarea } from "@/components/ui/field";
 import { Drawer } from "@/components/ui/modal";
 import { DataTable, type Column } from "@/components/ui/table";
 import { Tabs } from "@/components/ui/tabs";
@@ -16,22 +16,39 @@ import {
 } from "@/components/ui/misc";
 import { ErrorState, TableSkeleton } from "@/components/ui/states";
 import { useApi } from "@/lib/api/hooks";
+import { RequirePermission } from "@/components/layout/permission-gate";
+import { useAdminSession } from "@/lib/api/admin-session";
 import {
-  approveProvider, listProviderApplications, listWorkOrders, rejectProvider, suspendProvider,
-} from "@/lib/api/resources";
+  approveProviderAdmin, listAdminProviderApplications, reinstateProviderAdmin,
+  rejectProviderAdmin, suspendProviderAdmin,
+} from "@/lib/api/admin";
 import type { ApiServiceProviderApplication } from "@/lib/api/types";
-import { formatDate, humanize, money, relativeTime } from "@/lib/utils";
+import { formatDate, humanize, relativeTime } from "@/lib/utils";
 
 export default function ServiceProvidersPage() {
+  return (
+    <RequirePermission codes={["providers.view"]}>
+      <Providers />
+    </RequirePermission>
+  );
+}
+
+function Providers() {
+  const { can } = useAdminSession();
   const [tab, setTab] = useState("pending_verification");
   const [query, setQuery] = useState("");
-  const [planFilter, setPlanFilter] = useState("all");
   const [reviewing, setReviewing] = useState<ApiServiceProviderApplication | null>(null);
 
-  // Both endpoints are staff-only; a landlord account gets a 403 the error
-  // state explains rather than an empty table.
-  const feed = useApi(useCallback(() => listProviderApplications(), []));
-  const orders = useApi(useCallback(() => listWorkOrders(), []));
+  const feed = useApi(
+    useCallback(
+      () =>
+        listAdminProviderApplications({
+          status: tab === "all" ? undefined : tab,
+          search: query.trim() || undefined,
+        }),
+      [tab, query],
+    ),
+  );
   const [decisionNote, setDecisionNote] = useState("");
 
   async function decide(action: () => Promise<unknown>) {
@@ -45,7 +62,6 @@ export default function ServiceProvidersPage() {
     () => feed.data?.results ?? [],
     [feed.data],
   );
-  const workOrders = useMemo(() => orders.data?.results ?? [], [orders.data]);
 
   const tabs = useMemo(
     () =>
@@ -55,30 +71,11 @@ export default function ServiceProvidersPage() {
         { id: "paused", label: "Paused" },
         { id: "suspended", label: "Suspended" },
         { id: "all", label: "All" },
-      ].map((t) => ({
-        ...t,
-        count:
-          t.id === "all"
-            ? serviceProviders.length
-            : serviceProviders.filter((p) => p.status === t.id).length,
-      })),
-    [serviceProviders],
+      ].map((t) => ({ ...t })),
+    [],
   );
 
-  const rows = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    return serviceProviders.filter((provider) => {
-      if (tab !== "all" && provider.status !== tab) return false;
-      if (
-        q &&
-        !`${provider.businessName} ${provider.userFullName} ${provider.userEmail}`
-          .toLowerCase()
-          .includes(q)
-      )
-        return false;
-      return true;
-    });
-  }, [serviceProviders, tab, query]);
+  const rows = serviceProviders;
 
   const columns: Column<ApiServiceProviderApplication>[] = [
     {
@@ -182,14 +179,14 @@ export default function ServiceProvidersPage() {
           icon={<Users className="size-4" />}
         />
         <StatCard
-          label="Open work orders"
-          value={String(workOrders.filter((w) => ["scheduled", "in_progress"].includes(w.status)).length)}
-          icon={<Briefcase className="size-4" />}
+          label="Verified"
+          value={String(serviceProviders.filter((p) => p.verificationStatus === "verified").length)}
+          icon={<BadgeCheck className="size-4" />}
         />
         <StatCard
-          label="Disputed"
-          value={String(workOrders.filter((w) => w.status === "disputed").length)}
-          hint="needs mediation"
+          label="Suspended"
+          value={String(serviceProviders.filter((p) => p.status === "suspended").length)}
+          hint="hidden from the marketplace"
         />
       </div>
 
@@ -202,17 +199,6 @@ export default function ServiceProvidersPage() {
             onChange={(e) => setQuery(e.target.value)}
             className="w-full sm:w-80"
           />
-          <Select
-            aria-label="Plan"
-            value={planFilter}
-            onChange={(e) => setPlanFilter(e.target.value)}
-            className="w-auto"
-          >
-            <option value="all">All plans</option>
-            <option value="starter">Starter</option>
-            <option value="professional">Professional</option>
-            <option value="business">Business</option>
-          </Select>
         </FilterBar>
 
         {feed.error ? (
@@ -237,75 +223,15 @@ export default function ServiceProvidersPage() {
       <Card className="mt-4">
         <CardHeader
           title="Work orders"
-          description="Accepted quotes being delivered, including disputes."
+          description="Jobs providers are delivering."
         />
-        {orders.error ? (
-          <CardBody>
-            <ErrorState error={orders.error} onRetry={orders.refetch} resource="work orders" />
-          </CardBody>
-        ) : orders.loading && !orders.data ? (
-          <TableSkeleton rows={4} columns={5} />
-        ) : (
-        <DataTable
-          rows={workOrders}
-          rowKey={(row) => row.id}
-          pageSize={6}
-          columns={[
-            {
-              key: "reference",
-              header: "Work order",
-              cell: (row) => (
-                <span>
-                  <span className="text-ink block font-mono text-xs font-medium">
-                    WO-{row.id}
-                  </span>
-                  <span className="text-ink-subtle block max-w-48 truncate text-xs">
-                    {row.requestTitle}
-                  </span>
-                </span>
-              ),
-            },
-            {
-              key: "provider",
-              header: "Provider",
-              hideOnMobile: true,
-              cell: (row) => (
-                <span className="text-ink-muted block max-w-40 truncate text-[13px]">
-                  {row.providerName}
-                </span>
-              ),
-            },
-            {
-              key: "requester",
-              header: "Requested by",
-              hideOnMobile: true,
-              cell: (row) => <span className="text-ink-muted text-[13px]">#{row.requesterId}</span>,
-            },
-            {
-              key: "scheduled",
-              header: "Scheduled",
-              hideOnMobile: true,
-              cell: (row) => (
-                <span className="text-ink-muted text-xs">
-                  {row.scheduledAt ? formatDate(row.scheduledAt) : "Not scheduled"}
-                </span>
-              ),
-            },
-            {
-              key: "amount",
-              header: "Amount",
-              align: "right",
-              sortValue: (row) => Number(row.finalQuoteAmount),
-              cell: (row) => (
-                <span className="text-ink text-[13px] font-medium tabular-nums">
-                  {money(row.finalQuoteAmount)}
-                </span>
-              ),
-            },
-            { key: "status", header: "Status", cell: (row) => <StatusBadge status={row.status} /> },
-          ]}
-        />
-        )}
+        <CardBody>
+          <EmptyState
+            icon={<Briefcase className="size-5" />}
+            title="Needs a staff endpoint"
+            description="The admin API covers provider applications only. /service-providers/work-orders is scoped to the signed-in user, so it would show your own jobs rather than the platform's."
+          />
+        </CardBody>
       </Card>
 
       <Drawer
@@ -318,23 +244,42 @@ export default function ServiceProvidersPage() {
             <>
               <Button
                 variant="danger"
-                onClick={() => decide(() => rejectProvider(reviewing.id, decisionNote))}
+                disabled={!can("providers.review")}
+                onClick={() => decide(() => rejectProviderAdmin(reviewing.id, decisionNote || undefined))}
               >
                 <XCircle className="size-4" /> Reject
               </Button>
-              <Button variant="primary" onClick={() => decide(() => approveProvider(reviewing.id))}>
+              <Button
+                variant="primary"
+                disabled={!can("providers.review")}
+                onClick={() => decide(() => approveProviderAdmin(reviewing.id))}
+              >
                 <CheckCircle2 className="size-4" /> Approve provider
               </Button>
             </>
           ) : (
             <>
-              <Button
-                variant="danger"
-                disabled={!reviewing}
-                onClick={() => reviewing && decide(() => suspendProvider(reviewing.id, decisionNote))}
-              >
-                <PauseCircle className="size-4" /> Suspend
-              </Button>
+              {reviewing?.status === "suspended" ? (
+                <Button
+                  variant="primary"
+                  disabled={!can("providers.review")}
+                  onClick={() =>
+                    reviewing && decide(() => reinstateProviderAdmin(reviewing.id, decisionNote || undefined))
+                  }
+                >
+                  <CheckCircle2 className="size-4" /> Reinstate
+                </Button>
+              ) : (
+                <Button
+                  variant="danger"
+                  disabled={!reviewing || !can("providers.review")}
+                  onClick={() =>
+                    reviewing && decide(() => suspendProviderAdmin(reviewing.id, decisionNote || undefined))
+                  }
+                >
+                  <PauseCircle className="size-4" /> Suspend
+                </Button>
+              )}
               <Button onClick={() => setReviewing(null)}>Close</Button>
             </>
           )
