@@ -13,6 +13,8 @@ interface AdminSession {
   forbidden: boolean;
   /** Not signed in at all. */
   unauthenticated: boolean;
+  /** The backend has no `/admin/` API — it predates the staff endpoints. */
+  missingApi: boolean;
   can: (...codes: PermissionCode[]) => boolean;
   canAny: (...codes: PermissionCode[]) => boolean;
   refetch: () => void;
@@ -56,6 +58,8 @@ export function AdminSessionProvider({ children }: { children: React.ReactNode }
         ready: !query.loading,
         forbidden: status === 403,
         unauthenticated: status === 401,
+        // A 404 on /admin/me means the server is up but has no staff API.
+        missingApi: status === 404,
         can,
         canAny,
         refetch: query.refetch,

@@ -3,9 +3,9 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Sidebar } from "@/components/layout/sidebar";
-import { NoAdminAccess } from "@/components/layout/permission-gate";
+import { NoAdminAccess, NoAdminApi } from "@/components/layout/permission-gate";
 import { AdminSessionProvider, useAdminSession } from "@/lib/api/admin-session";
-import { tokenStore } from "@/lib/api/client";
+import { API_BASE_URL, tokenStore } from "@/lib/api/client";
 import { Topbar } from "@/components/layout/topbar";
 import { CommandPalette } from "@/components/layout/command-palette";
 
@@ -19,7 +19,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
 function Shell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const { ready, me, forbidden, unauthenticated } = useAdminSession();
+  const { ready, me, forbidden, unauthenticated, missingApi } = useAdminSession();
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -40,7 +40,9 @@ function Shell({ children }: { children: React.ReactNode }) {
     router.push("/login");
   }
 
-  // `/admin/me` is the gate: 401 means no session, 403 means not an admin.
+  // `/admin/me` is the gate: 404 means the server has no staff API at all,
+  // 401 means no session, 403 means signed in but not an admin.
+  if (ready && missingApi) return <NoAdminApi baseUrl={API_BASE_URL} />;
   if (ready && unauthenticated) {
     return (
       <div className="grid min-h-dvh place-items-center px-5">

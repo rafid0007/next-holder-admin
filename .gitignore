@@ -41,3 +41,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# locally generated dev credentials, never committed
+admin-credentials.local.txt
