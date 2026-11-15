@@ -437,6 +437,7 @@ export type NotificationType =
   | "maintenance"
   | "rent_bill"
   | "service_provider"
+  | "credits"
   | "general";
 
 export interface Notification {

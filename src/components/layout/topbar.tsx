@@ -30,6 +30,7 @@ const typeTone: Record<string, string> = {
   rent_bill: "bg-ok",
   lease: "bg-info",
   service_provider: "bg-bad",
+  credits: "bg-brand",
   general: "bg-ink-subtle",
 };
 
@@ -167,7 +168,7 @@ export function Topbar({
                       <span
                         className={cn(
                           "mt-1.5 size-1.5 shrink-0 rounded-full",
-                          typeTone[item.type],
+                          typeTone[item.type] ?? typeTone.general,
                         )}
                       />
                       <span className="min-w-0">
