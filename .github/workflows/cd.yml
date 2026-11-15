@@ -1,0 +1,72 @@
+name: CD
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    # On workflow_run, only deploy pushes to main whose CI passed (not PRs targeting main).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push')
+    environment: production
+
+    steps:
+      - name: Configure SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+
+      - name: Deploy to server
+        env:
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          DEPLOY_USER: ${{ secrets.DEPLOY_USER }}
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+        run: |
+          ssh -i ~/.ssh/deploy_key -o StrictHostKeyChecking=yes -p "${DEPLOY_PORT:-22}" \
+            "${DEPLOY_USER:-deploy}@${DEPLOY_HOST}" "DEPLOY_SHA=$DEPLOY_SHA bash -s" <<'EOF'
+          set -euo pipefail
+
+          APP_DIR="/var/www/next-holder/next-holder-admin"
+          SERVICE_NAME="nextholder-admin"
+
+          cd "$APP_DIR"
+
+          echo "==> Fetching $DEPLOY_SHA"
+          git fetch --quiet origin main
+          git checkout --quiet -B main "$DEPLOY_SHA"
+
+          echo "==> Installing dependencies"
+          npm ci --no-audit --no-fund
+
+          # NEXT_PUBLIC_API_BASE_URL is read from .env.production.local on the server at build time.
+          echo "==> Building"
+          npm run build
+
+          echo "==> Restarting service"
+          sudo systemctl restart "$SERVICE_NAME"
+          sleep 5
+          sudo systemctl is-active "$SERVICE_NAME"
+          curl -fsS -o /dev/null http://127.0.0.1:3000/login
+
+          echo "==> Deploy complete: $(git log -1 --oneline)"
+          EOF
+
+      - name: Clean up key
+        if: always()
+        run: rm -f ~/.ssh/deploy_key
