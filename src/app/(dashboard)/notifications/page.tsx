@@ -3,7 +3,7 @@
 import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  Bell, BellOff, CalendarCheck, Check, FileText, Info, Megaphone, Send, Users, Wrench,
+  Bell, BellOff, CalendarCheck, Check, Coins, FileText, Info, Megaphone, Send, Users, Wrench,
 } from "lucide-react";
 import { Card, CardBody, CardHeader } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -26,6 +26,7 @@ const typeMeta: Record<NotificationType, { icon: typeof Bell; tone: string }> = 
   maintenance: { icon: Wrench, tone: "bg-warn-soft text-warn" },
   rent_bill: { icon: Megaphone, tone: "bg-ok-soft text-ok" },
   service_provider: { icon: Users, tone: "bg-bad-soft text-bad" },
+  credits: { icon: Coins, tone: "bg-brand-soft text-brand-ink" },
   general: { icon: Info, tone: "bg-surface-hover text-ink-muted" },
 };
 
@@ -155,7 +156,8 @@ export default function NotificationsPage() {
         ) : (
           <ul>
             {rows.map((item) => {
-              const meta = typeMeta[item.type];
+              // Fall back for types added on the backend before the console knows them.
+              const meta = typeMeta[item.type] ?? typeMeta.general;
               return (
                 <li
                   key={item.id}
