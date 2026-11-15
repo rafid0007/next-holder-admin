@@ -18,11 +18,12 @@ import {
 import { navItems } from "./nav";
 import { useTheme } from "./theme-provider";
 import { tokenStore } from "@/lib/api/client";
+import { useAdminSession } from "@/lib/api/admin-session";
 import { useApi } from "@/lib/api/hooks";
 import { listNotifications, markAllNotificationsRead } from "@/lib/api/resources";
 import { Avatar } from "@/components/ui/misc";
 import { Button } from "@/components/ui/button";
-import { cn, relativeTime } from "@/lib/utils";
+import { adminRoleLabel, cn, relativeTime } from "@/lib/utils";
 
 const typeTone: Record<string, string> = {
   maintenance: "bg-warn",
@@ -55,6 +56,9 @@ export function Topbar({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { me } = useAdminSession();
+  const displayName = me ? me.fullName || me.email : "";
+  const roleLabel = me ? adminRoleLabel(me) : "";
   const { theme, toggle } = useTheme();
   const [panel, setPanel] = useState<"none" | "bell" | "user">("none");
   const ref = useDismiss(() => setPanel("none"));
@@ -204,12 +208,12 @@ export function Topbar({
             onClick={() => setPanel((p) => (p === "user" ? "none" : "user"))}
             className="focus-ring hover:bg-surface-hover flex items-center gap-2 rounded-lg py-1 pr-1.5 pl-1 transition-colors"
           >
-            <Avatar name="Rafid Mostafa" />
+            <Avatar name={displayName} />
             <span className="hidden text-left sm:block">
-              <span className="text-ink block text-[13px] leading-4 font-medium">
-                Rafid Mostafa
+              <span className="text-ink block max-w-40 truncate text-[13px] leading-4 font-medium">
+                {displayName}
               </span>
-              <span className="text-ink-subtle block text-[11px] leading-4">Platform admin</span>
+              <span className="text-ink-subtle block text-[11px] leading-4">{roleLabel}</span>
             </span>
             <ChevronDown className="text-ink-subtle size-3.5" />
           </button>
@@ -220,11 +224,11 @@ export function Topbar({
               style={{ animation: "panel-in 160ms cubic-bezier(0.16,1,0.3,1)" }}
             >
               <div className="border-line mb-1.5 border-b px-2.5 py-2">
-                <p className="text-ink text-[13px] font-medium">Rafid Mostafa</p>
-                <p className="text-ink-subtle truncate text-xs">admin@nextholder.app</p>
+                <p className="text-ink truncate text-[13px] font-medium">{displayName}</p>
+                <p className="text-ink-subtle truncate text-xs">{me?.email ?? ""}</p>
               </div>
               {[
-                { label: "Account settings", icon: UserCog, href: "/settings" },
+                { label: "Account settings", icon: UserCog, href: "/account" },
                 { label: "Platform settings", icon: Settings, href: "/settings" },
               ].map((entry) => (
                 <Link

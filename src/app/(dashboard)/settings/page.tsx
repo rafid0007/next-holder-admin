@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Building2, Coins, Database, Globe, KeyRound, Moon, Plug, Shield, Sun, Users,
 } from "lucide-react";
@@ -16,6 +17,7 @@ import { API_BASE_URL } from "@/lib/api/client";
 export default function SettingsPage() {
   const [tab, setTab] = useState("platform");
   const { theme, toggle } = useTheme();
+  const router = useRouter();
 
   return (
     <>
@@ -195,27 +197,12 @@ export default function SettingsPage() {
                 Console access is granted to Django staff users. Object-level permissions still
                 apply to landlord and tenant data.
               </p>
-              <ul className="divide-line mt-4 divide-y">
-                {[
-                  { name: "Rafid Mostafa", email: "admin@nextholder.app", role: "Superuser" },
-                  { name: "Support desk", email: "support@nextholder.app", role: "Staff" },
-                  { name: "Finance", email: "finance@nextholder.app", role: "Staff (read-only)" },
-                ].map((admin) => (
-                  <li key={admin.email} className="flex items-center gap-3 py-3 first:pt-0">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-ink text-[13px] font-medium">{admin.name}</p>
-                      <p className="text-ink-subtle truncate text-xs">{admin.email}</p>
-                    </div>
-                    <Badge tone={admin.role === "Superuser" ? "brand" : "neutral"}>
-                      {admin.role}
-                    </Badge>
-                    <Button size="sm" variant="ghost">
-                      Manage
-                    </Button>
-                  </li>
-                ))}
-              </ul>
-              <Button className="mt-4">Invite an admin</Button>
+              <div className="mt-4 flex flex-wrap gap-2">
+                <Button onClick={() => router.push("/staff")}>Manage staff & roles</Button>
+                <Button variant="ghost" onClick={() => router.push("/account")}>
+                  Your account
+                </Button>
+              </div>
             </section>
 
             <section className="border-line border-t pt-6">
