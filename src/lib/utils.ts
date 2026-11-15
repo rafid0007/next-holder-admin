@@ -78,3 +78,9 @@ export function initials(name: string) {
     .map((p) => p[0]?.toUpperCase() ?? "")
     .join("");
 }
+
+/** Short label for an admin's access level, e.g. "Superuser" or "Support, Finance". */
+export function adminRoleLabel(me: { isSuperuser: boolean; roles: { name: string }[] }): string {
+  if (me.isSuperuser) return "Superuser";
+  return me.roles.map((role) => role.name).join(", ") || "Staff";
+}

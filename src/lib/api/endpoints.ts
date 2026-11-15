@@ -10,6 +10,7 @@ export const endpoints = {
     me: "/auth/me",
     switchRole: "/auth/switch-role",
     changePassword: "/auth/change-password",
+    changeEmail: "/auth/change-email",
     users: "/auth/users",
     provisionTenant: "/auth/tenants",
     tenantSuggestions: "/auth/tenants/suggestions",

@@ -1,4 +1,4 @@
-import { api, request } from "./client";
+import { api, request, tokenStore } from "./client";
 import { endpoints } from "./endpoints";
 import type {
   Amenity,
@@ -162,6 +162,27 @@ export const signIn = (identifier: string, password: string) =>
     body: { identifier, password },
     noRetry: true,
   });
+
+/**
+ * Changes the signed-in user's password. Newer backends end every other
+ * session and hand back a fresh token pair, which replaces the stored one.
+ */
+export async function changePassword(body: {
+  currentPassword: string;
+  newPassword: string;
+  confirmNewPassword: string;
+}) {
+  const result = await api.put<{ message: string; access?: string; refresh?: string }>(
+    endpoints.auth.changePassword,
+    body,
+  );
+  if (result.access) tokenStore.set(result.access, result.refresh);
+  return result;
+}
+
+/** Changes the signed-in user's email (their sign-in identifier). */
+export const changeEmail = (body: { currentPassword: string; newEmail: string }) =>
+  api.put<{ email: string }>(endpoints.auth.changeEmail, body);
 
 /** Pulls a paginated response down to its rows for callers that only need those. */
 export const rows = <T>(page: Paginated<T> | null): T[] => page?.results ?? [];
